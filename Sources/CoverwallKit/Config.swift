@@ -10,6 +10,12 @@ public struct Config: Codable, Equatable, Sendable {
 
     public static let currentVersion = 1
 
+    public init(activeProfile: String? = nil, profiles: [String: Profile] = [:]) {
+        version = Self.currentVersion
+        self.activeProfile = activeProfile
+        self.profiles = profiles
+    }
+
     /// Decodes and validates; the first problem found is thrown.
     public static func decode(_ data: Data) throws -> Config {
         let config = try JSONDecoder().decode(Config.self, from: data)
@@ -63,15 +69,29 @@ public struct Profile: Codable, Equatable, Sendable {
     public var background: String
     public var gapPoints: Double
 
+    /// Defaults are the CLI's (PLAN.md §4.1); `tileMaxPixels` is normally computed from the displays.
+    public init(source: String, grid: Grid = Grid(columns: 7, rows: 5), intervalSeconds: Double = 4, swapsPerTick: Int = 1,
+                transition: Transition = .flip, tileMaxPixels: Int = 1024, background: String = "#000000", gapPoints: Double = 0) {
+        self.source = source
+        self.grid = grid
+        self.intervalSeconds = intervalSeconds
+        self.swapsPerTick = swapsPerTick
+        self.transition = transition
+        self.tileMaxPixels = tileMaxPixels
+        self.background = background
+        self.gapPoints = gapPoints
+    }
+
     func validate(name: String) throws {
         func check(_ ok: Bool, _ field: String, _ expected: String) throws {
             if !ok { throw ConfigError.invalid(profile: name, field: field, expected: expected) }
         }
         let range = 1...16
         try check(source.hasPrefix("/"), "source", "an absolute path")
-        try check(range.contains(grid.columns) && range.contains(grid.rows), "grid", "1x1 … 16x16")
+        try check(range.contains(grid.columns) && range.contains(grid.rows ?? 1), "grid", "1x1 … 16x16")
         try check(intervalSeconds > 0, "intervalSeconds", "> 0")
-        try check((1...grid.columns * grid.rows).contains(swapsPerTick), "swapsPerTick", "1 … columns × rows")
+        // Without rows only one row is guaranteed.
+        try check((1...grid.columns * (grid.rows ?? 1)).contains(swapsPerTick), "swapsPerTick", "1 … columns × rows")
         try check(tileMaxPixels > 0, "tileMaxPixels", "> 0")
         try check(background.count == 7 && background.first == "#" && background.dropFirst().allSatisfy(\.isHexDigit),
                   "background", "#RRGGBB")
@@ -81,11 +101,20 @@ public struct Profile: Codable, Equatable, Sendable {
 
 public struct Grid: Codable, Equatable, Sendable {
     public var columns: Int
-    public var rows: Int
+    /// `nil`: rows fitted to each screen (`--columns` only), see `GridLayout`.
+    public var rows: Int?
 
-    public init(columns: Int, rows: Int) {
+    public init(columns: Int, rows: Int?) {
         self.columns = columns
         self.rows = rows
+    }
+
+    /// `"7x5"` (CLI `--grid`). Only the shape is checked here; the range in `Config.validate`.
+    public init?(parsing text: String) {
+        let parts = text.lowercased().split(separator: "x", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }),
+              let columns = Int(parts[0]), let rows = Int(parts[1]) else { return nil }
+        self.init(columns: columns, rows: rows)
     }
 }
 

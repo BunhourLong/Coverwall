@@ -1,4 +1,4 @@
-# Kit via SwiftPM; saver built with plain swiftc (no Xcode project). CLI/HostApp come later.
+# Kit + CLI via SwiftPM; saver built with plain swiftc (no Xcode project). HostApp comes later.
 SAVER   := build/Coverwall.saver
 SOURCES := $(wildcard Saver/*.swift)
 

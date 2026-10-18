@@ -61,3 +61,11 @@ func coversOtherAspectRatios(w: CGFloat, h: CGFloat, c: Int, r: Int, tile: CGFlo
     let single = GridLayout(screen: CGSize(width: 2560, height: 1440), columns: 1, rows: 1)
     #expect(single.pixelSize(scale: 2, tileMax: GridLayout.maxTilePixels) == 2048)
 }
+
+@Test func defaultTileMaxFitsTheSharpestDisplay() {
+    let displays = [(points: CGSize(width: 1920, height: 1080), scale: CGFloat(1)),
+                    (points: CGSize(width: 2560, height: 1440), scale: CGFloat(2))]
+    #expect(GridLayout.defaultTileMax(columns: 7, rows: 5, displays: displays) == 732)  // ceil(2560 / 7 × 2)
+    #expect(GridLayout.defaultTileMax(columns: 1, rows: 1, displays: displays) == 2048)
+    #expect(GridLayout.defaultTileMax(columns: 7, rows: 5, displays: []) == 1024)       // headless
+}

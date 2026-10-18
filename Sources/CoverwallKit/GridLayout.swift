@@ -11,6 +11,12 @@ public struct GridLayout: Sendable {
     /// Upper bound for the CLI's computed `tileMaxPixels` default.
     public static let maxTilePixels = 2048
 
+    /// CLI default for `tileMaxPixels`: on-screen tile pixels on the sharpest display, ≤ 2048.
+    public static func defaultTileMax(columns: Int, rows: Int?, displays: [(points: CGSize, scale: CGFloat)]) -> Int {
+        displays.map { GridLayout(screen: $0.points, columns: columns, rows: rows).pixelSize(scale: $0.scale, tileMax: maxTilePixels) }
+            .max() ?? 1024
+    }
+
     /// `rows: nil` derives rows from the screen (`--columns` only). Preview clamps to at most 4x3.
     public init(screen: CGSize, columns: Int, rows: Int?, preview: Bool = false) {
         let columns = preview ? min(columns, 4) : columns

@@ -79,3 +79,20 @@ func rejectsUnsafeProfileNames(name: String) {
     let json = sampleJSON.replacingOccurrences(of: "\"macmiller\"", with: "\"\(name)\"")
     #expect(throws: ConfigError.invalidProfileName(name)) { try Config.decode(Data(json.utf8)) }
 }
+
+@Test func columnsOnlyGridLeavesRowsToTheScreen() throws {
+    let json = sampleJSON.replacingOccurrences(of: #"{ "columns": 7, "rows": 5 }"#, with: #"{ "columns": 7 }"#)
+    let profile = try #require(Config.decode(Data(json.utf8)).active)
+    #expect(profile.grid == Grid(columns: 7, rows: nil))
+}
+
+@Test func parsesGridArgument() {
+    #expect(Grid(parsing: "7x5") == Grid(columns: 7, rows: 5))
+    #expect(Grid(parsing: "1X1") == Grid(columns: 1, rows: 1))
+}
+
+/// Range is left to `Config.validate`; parsing only rejects the shape.
+@Test(arguments: ["7", "7x", "x5", "7x5x2", " 7x5", "-1x5", "axb", ""])
+func rejectsMalformedGridArgument(text: String) {
+    #expect(Grid(parsing: text) == nil)
+}
