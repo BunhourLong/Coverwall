@@ -1,10 +1,16 @@
-# Phase 0: saver only, built with plain swiftc (no Xcode project). Kit/CLI/HostApp come later.
+# Kit via SwiftPM; saver built with plain swiftc (no Xcode project). CLI/HostApp come later.
 SAVER   := build/Coverwall.saver
 SOURCES := $(wildcard Saver/*.swift)
 
-.PHONY: build install reload clean
+.PHONY: build kit test install reload clean
 
-build: $(SAVER)
+build: kit $(SAVER)
+
+kit:
+	swift build
+
+test:
+	swift test
 
 $(SAVER): $(SOURCES) Saver/Info.plist
 	rm -rf $@
