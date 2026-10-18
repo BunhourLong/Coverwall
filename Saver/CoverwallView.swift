@@ -29,6 +29,7 @@ private func note(_ message: String) {
 @objc(CoverwallView)
 final class CoverwallView: ScreenSaverView {
     private static var instanceCount = 0
+    private static var liveCount = 0
 
     private let instance: Int
     private let treatAsPreview: Bool
@@ -36,6 +37,7 @@ final class CoverwallView: ScreenSaverView {
 
     override init?(frame: NSRect, isPreview: Bool) {
         CoverwallView.instanceCount += 1
+        CoverwallView.liveCount += 1
         instance = CoverwallView.instanceCount
         // Tahoe reports isPreview unreliably and spawns zero-frame ghost instances; the
         // System Settings thumbnail is small, so size is the safer signal.
@@ -43,7 +45,7 @@ final class CoverwallView: ScreenSaverView {
         super.init(frame: frame, isPreview: isPreview)
 
         let locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
-        note("init #\(instance) isPreview=\(isPreview) treatAsPreview=\(treatAsPreview) frame=\(NSStringFromRect(frame)) screenLocked=\(locked) home=\(NSHomeDirectory())")
+        note("init #\(instance) live=\(Self.liveCount) isPreview=\(isPreview) treatAsPreview=\(treatAsPreview) frame=\(NSStringFromRect(frame)) screenLocked=\(locked) home=\(NSHomeDirectory())")
 
         animationTimeInterval = 3600
         render()
@@ -51,11 +53,7 @@ final class CoverwallView: ScreenSaverView {
         for name in ["willstart", "didstart", "willstop", "didstop"] {
             observers.append(DistributedNotificationCenter.default().addObserver(
                 forName: Notification.Name("com.apple.screensaver.\(name)"), object: nil, queue: .main
-            ) { [instance, treatAsPreview] _ in
-                let exits = name == "willstop" && !treatAsPreview
-                note("\(name) #\(instance) treatAsPreview=\(treatAsPreview)\(exits ? " → exit(0) in 2s" : "")")
-                if exits { DispatchQueue.main.asyncAfter(deadline: .now() + 2) { exit(0) } }
-            })
+            ) { [weak self] _ in self?.handle(name) })
         }
     }
 
@@ -63,7 +61,18 @@ final class CoverwallView: ScreenSaverView {
 
     deinit {
         observers.forEach(DistributedNotificationCenter.default().removeObserver)
-        note("deinit #\(instance)")
+        CoverwallView.liveCount -= 1
+        note("deinit #\(instance) live=\(Self.liveCount)")
+    }
+
+    // No exit(0): on macOS 26.6 it kills the next session (see SPIKE_NOTES Q4). Tear down / resume instead.
+    private func handle(_ name: String) {
+        note("\(name) #\(instance) live=\(Self.liveCount) treatAsPreview=\(treatAsPreview)")
+        switch name {
+        case "willstop": layer?.sublayers?.forEach { $0.contents = nil }  // drop the decoded image
+        case "didstart": render()
+        default: break
+        }
     }
 
     override func startAnimation() {
