@@ -1,0 +1,23 @@
+# --- AI assistant / personal workflow files (local only) ---
+CLAUDE.md
+MEMORY.md
+.claude/
+PLAN.md
+SPIKE_NOTES.md
+
+# --- Build output ---
+# Makefile output (Coverwall.saver, per-arch binaries)
+build/
+# SwiftPM build cache
+.build/
+# Xcode build cache (if pointed at the project dir)
+DerivedData/
+
+# --- SwiftPM / Xcode per-user state ---
+.swiftpm/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# --- macOS ---
+.DS_Store
