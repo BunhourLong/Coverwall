@@ -17,4 +17,5 @@ public enum Paths {
     public static func profile(_ name: String, in dir: URL = dataDir) -> URL { dir.appendingPathComponent("profiles/\(name)", isDirectory: true) }
     public static func manifest(_ name: String, in dir: URL = dataDir) -> URL { profile(name, in: dir).appendingPathComponent("manifest.json") }
     public static func tiles(_ name: String, in dir: URL = dataDir) -> URL { profile(name, in: dir).appendingPathComponent("tiles", isDirectory: true) }
+    public static func tile(_ hash: String, of name: String, in dir: URL = dataDir) -> URL { tiles(name, in: dir).appendingPathComponent("\(hash).jpg") }
 }

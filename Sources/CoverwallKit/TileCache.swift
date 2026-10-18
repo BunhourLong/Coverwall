@@ -37,7 +37,7 @@ public enum TileCache {
         guard fm.fileExists(atPath: profile.source, isDirectory: &isFolder), isFolder.boolValue else {
             throw TileCacheError.sourceMissing(profile.source)
         }
-        func tile(_ hash: String) -> URL { tiles.appendingPathComponent("\(hash).jpg") }
+        func tile(_ hash: String) -> URL { Paths.tile(hash, of: name, in: dataDir) }
         try fm.createDirectory(at: tiles, withIntermediateDirectories: true)
         let old = (try? JSONDecoder().decode(CacheManifest.self, from: Data(contentsOf: manifestURL))) ?? CacheManifest()
         // Same tile size as last time: existing tiles stay, unchanged sources aren't even read.

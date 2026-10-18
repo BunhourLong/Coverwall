@@ -2,9 +2,9 @@ import Foundation
 import Testing
 import CoverwallKit
 
-private let allConditions: [SaverActivity.Event] = [.sessionStarted, .animationStarted, .visible(true)]
+private let allConditions: [SaverActivity.Event] = [.sessionStarted, .animationStarted]
 
-@Test func activeOnlyWhenSessionStartedAndVisibleInAnyOrder() {
+@Test func activeOnlyWhenSessionAndStartedInAnyOrder() {
     var activity = SaverActivity()
     #expect(!activity.isActive)
     for event in allConditions.reversed() {
@@ -40,7 +40,14 @@ private func runningActivity() -> SaverActivity {
 @Test func instanceCreatedMidSessionPicksUpTheProcessWideFlag() {
     var activity = SaverActivity(sessionActive: true)
     activity.handle(.animationStarted)
-    activity.handle(.visible(true))
+    #expect(activity.isActive)
+}
+
+@Test func supersededOrStoppedInstanceIdlesUntilStartedAgain() {
+    var activity = runningActivity()
+    activity.handle(.animationStopped)  // stopAnimation, or a newer instance started on this screen
+    #expect(!activity.isActive)
+    activity.handle(.animationStarted)
     #expect(activity.isActive)
 }
 

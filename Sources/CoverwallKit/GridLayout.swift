@@ -1,12 +1,12 @@
 import CoreGraphics
 
-/// Square tiles scaled to cover the screen, centered, overflow cropped (PLAN.md §4.2).
-/// Tile `i` sits at column `i % columns`, row `i / columns`.
+/// Whole tiles filling the screen edge to edge: `width / columns × height / rows`, so nothing is cut at
+/// the border; each cover is aspect-filled into its tile (PLAN.md §4.2). Tile `i` sits at column
+/// `i % columns`, row `i / columns`.
 public struct GridLayout: Sendable {
     public let columns: Int
     public let rows: Int
-    public let tileSize: CGFloat
-    let origin: CGPoint
+    public let tileSize: CGSize
 
     /// Upper bound for the CLI's computed `tileMaxPixels` default.
     public static let maxTilePixels = 2048
@@ -17,26 +17,24 @@ public struct GridLayout: Sendable {
             .max() ?? 1024
     }
 
-    /// `rows: nil` derives rows from the screen (`--columns` only). Preview clamps to at most 4x3.
+    /// `rows: nil` derives rows from the screen (`--columns` only) so tiles stay nearly square.
+    /// Preview clamps to at most 4x3.
     public init(screen: CGSize, columns: Int, rows: Int?, preview: Bool = false) {
         let columns = preview ? min(columns, 4) : columns
         // Zero-frame ghost instances exist (SPIKE_NOTES.md); never divide by a zero width.
-        let fitted = rows ?? (screen.width > 0 ? Int((screen.height * CGFloat(columns) / screen.width).rounded(.up)) : 1)
+        let fitted = rows ?? (screen.width > 0 ? Int((screen.height * CGFloat(columns) / screen.width).rounded()) : 1)
         self.columns = columns
         self.rows = max(1, min(fitted, preview ? 3 : 16))
-        tileSize = max(screen.width / CGFloat(columns), screen.height / CGFloat(self.rows))
-        origin = CGPoint(x: (screen.width - tileSize * CGFloat(columns)) / 2,
-                         y: (screen.height - tileSize * CGFloat(self.rows)) / 2)
+        tileSize = CGSize(width: screen.width / CGFloat(columns), height: screen.height / CGFloat(self.rows))
     }
 
     public func frame(ofTile index: Int) -> CGRect {
-        CGRect(x: origin.x + CGFloat(index % columns) * tileSize,
-               y: origin.y + CGFloat(index / columns) * tileSize,
-               width: tileSize, height: tileSize)
+        CGRect(origin: CGPoint(x: CGFloat(index % columns) * tileSize.width, y: CGFloat(index / columns) * tileSize.height),
+               size: tileSize)
     }
 
-    /// Decode size in pixels: on-screen tile pixels, capped by the profile's `tileMaxPixels`.
+    /// Decode size in pixels: the tile's long side on screen (aspect fill), capped by `tileMaxPixels`.
     public func pixelSize(scale: CGFloat, tileMax: Int) -> Int {
-        min(Int((tileSize * scale).rounded(.up)), tileMax)
+        min(Int((max(tileSize.width, tileSize.height) * scale).rounded(.up)), tileMax)
     }
 }

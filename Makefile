@@ -1,10 +1,14 @@
-# Kit + CLI via SwiftPM; saver built with plain swiftc (no Xcode project). HostApp comes later.
+# Kit + CLI via SwiftPM; saver + HostApp built with plain swiftc (no Xcode project).
 SAVER   := build/Coverwall.saver
-SOURCES := $(wildcard Saver/*.swift)
+HOST    := build/CoverwallHost
+# Only the Kit files the saver may use (CLAUDE.md constraint 8): no Store/TileCache, no networking.
+KIT     := $(addprefix Sources/CoverwallKit/,Config.swift Paths.swift GridLayout.swift ShuffleBag.swift \
+             CacheManifest.swift SaverActivity.swift SaverContent.swift)
+SOURCES := $(wildcard Saver/*.swift) $(KIT)
 
-.PHONY: build kit test install reload clean
+.PHONY: build kit test install reload host clean
 
-build: kit $(SAVER)
+build: kit $(SAVER) $(HOST)
 
 kit:
 	swift build
@@ -22,6 +26,13 @@ $(SAVER): $(SOURCES) Saver/Info.plist
 	done
 	lipo -create build/Coverwall-arm64 build/Coverwall-x86_64 -output $@/Contents/MacOS/Coverwall
 	codesign --force --sign - $@
+
+$(HOST): $(SOURCES) HostApp/HostApp.swift
+	xcrun swiftc -swift-version 5 -parse-as-library -module-name CoverwallHost -target $$(uname -m)-apple-macos14.6 \
+	  -o $@ $(SOURCES) HostApp/HostApp.swift
+
+host: $(HOST)
+	./$(HOST)
 
 install: build
 	mkdir -p "$(HOME)/Library/Screen Savers"

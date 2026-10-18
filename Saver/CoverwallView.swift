@@ -1,146 +1,317 @@
-// Phase 0 spike: show one image from the data dir, log everything the spike needs to answer.
-// Throwaway — Phase 3 replaces this with the real grid renderer.
+// The saver: a dumb renderer of the CLI's cache (CLAUDE.md). Kit decides what and when; this file only
+// feeds it lifecycle events and moves CALayers. All motion is Core Animation — no draw(_:), no per-frame code.
 
 import AppKit
 import ImageIO
 import ScreenSaver
 import os
 
-private let log = Logger(subsystem: "com.bunhourlong.Coverwall", category: "spike")
-
-// Spike-only: every event also goes to a file in the saver's own (writable) container, so the
-// sandboxed run can be read back from Terminal without `log show`.
-private let traceURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
-    .first?.appendingPathComponent("coverwall-spike.log")
-
-private func note(_ message: String) {
-    log.notice("\(message, privacy: .public)")
-    guard let traceURL else { return }
-    let line = "\(Date().formatted(.iso8601.time(includingFractionalSeconds: true))) pid=\(getpid()) \(message)\n"
-    if let handle = try? FileHandle(forWritingTo: traceURL) {
-        handle.seekToEndOfFile()
-        handle.write(Data(line.utf8))
-        try? handle.close()
-    } else {
-        try? Data(line.utf8).write(to: traceURL)
-    }
-}
+private let log = Logger(subsystem: "com.bunhourlong.Coverwall", category: "saver")
 
 @objc(CoverwallView)
 final class CoverwallView: ScreenSaverView {
-    private static var instanceCount = 0
-    private static var liveCount = 0
+    /// HostApp: there is no screen saver session, so the view counts as always in one.
+    static var alwaysInSession = false
 
-    private let instance: Int
-    private let treatAsPreview: Bool
-    private var observers: [NSObjectProtocol] = []
+    // Process-wide (one host process holds several instances, SPIKE_NOTES Q4 + Phase 3 probe).
+    private static var created = 0
+    private static var sessionActive = false
+    private static var roster = SaverRoster()
+    private static let instances = NSHashTable<CoverwallView>.weakObjects()
+    private static let decodeQueue = DispatchQueue(label: "com.bunhourlong.Coverwall.decode", qos: .utility)
+
+    private let id: Int
+    private let compact: Bool
+    private var activity: SaverActivity
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+
+    // Only while active (CLAUDE.md constraint 5: idle = no timer, no decoded images).
+    private var running = false
+    private var generation = 0  // bumped on teardown; late decodes from an older run are dropped
+    private var timer: Timer?
+    private var bag: ShuffleBag?
+    private var profile: Profile?
+    private var tileLayers: [CALayer] = []  // the image layers (each inside a perspective container)
+    private var pixels = 0
+    private var busyUntil: [Int: CFTimeInterval] = [:]
+
+    private static let flipDuration = 0.6, fadeDuration = 0.8, stagger = 0.15
 
     override init?(frame: NSRect, isPreview: Bool) {
-        CoverwallView.instanceCount += 1
-        CoverwallView.liveCount += 1
-        instance = CoverwallView.instanceCount
-        // Tahoe reports isPreview unreliably and spawns zero-frame ghost instances; the
-        // System Settings thumbnail is small, so size is the safer signal.
-        treatAsPreview = isPreview || frame.width < 400 || frame.height < 300
+        Self.created += 1
+        id = Self.created
+        // Preview-sized: the Settings thumbnail is small; on macOS 26 it's a 59×16 instance that never starts (SPIKE_NOTES).
+        compact = isPreview || frame.width < 400 || frame.height < 300
+        activity = SaverActivity(sessionActive: Self.sessionActive || compact || Self.alwaysInSession)
         super.init(frame: frame, isPreview: isPreview)
+        Self.instances.add(self)
+        animationTimeInterval = 3600  // swaps run on our own timer, never animateOneFrame
 
-        let locked = (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
-        note("init #\(instance) live=\(Self.liveCount) isPreview=\(isPreview) treatAsPreview=\(treatAsPreview) frame=\(NSStringFromRect(frame)) screenLocked=\(locked) home=\(NSHomeDirectory())")
+        let root = CALayer()
+        root.backgroundColor = .black
+        layer = root  // layer-hosting: assign the layer before wantsLayer
+        wantsLayer = true
 
-        animationTimeInterval = 3600
-        render()
-
-        for name in ["willstart", "didstart", "willstop", "didstop"] {
-            observers.append(DistributedNotificationCenter.default().addObserver(
-                forName: Notification.Name("com.apple.screensaver.\(name)"), object: nil, queue: .main
-            ) { [weak self] _ in self?.handle(name) })
-        }
+        activity.handle(.thermal(ProcessInfo.processInfo.thermalState))
+        activity.handle(.lowPower(ProcessInfo.processInfo.isLowPowerModeEnabled))
+        activity.handle(.reduceMotion(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion))
+        observe()
+        // Created mid-session = this session's own instance: load now instead of ~0.5 s later at
+        // startAnimation, which showed as a black gap before the covers (Phase 3 round 3).
+        if Self.sessionActive, !compact { handle(.animationStarted) }
+        log.info("init #\(self.id) compact=\(self.compact) frame=\(NSStringFromRect(frame), privacy: .public)")
     }
 
     required init?(coder: NSCoder) { nil }
 
     deinit {
-        observers.forEach(DistributedNotificationCenter.default().removeObserver)
-        CoverwallView.liveCount -= 1
-        note("deinit #\(instance) live=\(Self.liveCount)")
+        observers.forEach { center, token in center.removeObserver(token) }
     }
 
-    // No exit(0): on macOS 26.6 it kills the next session (see SPIKE_NOTES Q4). Tear down / resume instead.
-    private func handle(_ name: String) {
-        note("\(name) #\(instance) live=\(Self.liveCount) treatAsPreview=\(treatAsPreview)")
-        switch name {
-        case "willstop": layer?.sublayers?.forEach { $0.contents = nil }  // drop the decoded image
-        case "didstart": render()
-        default: break
+    // MARK: - Lifecycle → SaverActivity
+
+    private func observe() {
+        let distributed = DistributedNotificationCenter.default()
+        let workspace = NSWorkspace.shared.notificationCenter
+        func on(_ center: NotificationCenter, _ name: Notification.Name, _ event: @escaping () -> SaverActivity.Event?) {
+            observers.append((center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                guard let self, let event = event() else { return }
+                self.handle(event)
+            }))
         }
+        let sessionEvents = !compact && !Self.alwaysInSession
+        on(distributed, .init("com.apple.screensaver.didstart")) { sessionEvents ? .sessionStarted : nil }
+        on(distributed, .init("com.apple.screensaver.willstop")) { sessionEvents ? .sessionStopped : nil }
+        on(workspace, NSWorkspace.screensDidSleepNotification) { .displayAsleep(true) }
+        on(workspace, NSWorkspace.screensDidWakeNotification) { .displayAsleep(false) }
+        on(workspace, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) {
+            .reduceMotion(NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+        }
+        on(.default, ProcessInfo.thermalStateDidChangeNotification) { .thermal(ProcessInfo.processInfo.thermalState) }
+        on(.default, .NSProcessInfoPowerStateDidChange) { .lowPower(ProcessInfo.processInfo.isLowPowerModeEnabled) }
     }
 
     override func startAnimation() {
         super.startAnimation()
-        note("startAnimation #\(instance)")
+        // A freshly launched host never gets didstart, but ScreenSaverEngine is already running then.
+        if !compact, !Self.alwaysInSession,
+           !NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.ScreenSaver.Engine").isEmpty {
+            handle(.sessionStarted)
+        }
+        // Only the newest instance on a screen is the one on display; the older one goes idle.
+        let screen = (window?.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+        if let old = Self.roster.started(id, on: screen) {
+            Self.instances.allObjects.first { $0.id == old }?.handle(.animationStopped)
+        }
+        handle(.animationStarted)
     }
 
     override func stopAnimation() {
         super.stopAnimation()
-        note("stopAnimation #\(instance)")
+        handle(.animationStopped)
     }
 
-    // Candidate data dirs, in order. Inside the sandbox, Application Support resolves to the
-    // legacyScreenSaver container; /Users/Shared is the fallback under test.
-    private static var candidates: [(name: String, dir: URL)] {
-        var dirs: [(String, URL)] = []
-        if let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
-            dirs.append(("container", support.appendingPathComponent("Coverwall")))
+    private func handle(_ event: SaverActivity.Event) {
+        switch event {
+        case .sessionStarted: Self.sessionActive = true
+        case .sessionStopped: Self.sessionActive = false
+        default: break
         }
-        dirs.append(("shared", URL(fileURLWithPath: "/Users/Shared/Coverwall")))
-        return dirs
+        activity.handle(event)
+        apply()
     }
 
-    private func render() {
-        let root = CALayer()
-        root.backgroundColor = NSColor.black.cgColor
-        layer = root  // layer-hosting: assign the layer before wantsLayer
-        wantsLayer = true
+    /// Brings the view in line with `activity`: start, stop, or retime.
+    private func apply() {
+        guard activity.isActive else { return teardown() }
+        if !running { setUp() }
+        guard let profile, bag != nil else { return }  // fallback message: nothing to animate
+        let interval = activity.interval(base: profile.intervalSeconds)
+        if timer?.timeInterval != interval { startTimer(interval) }
+    }
 
-        for (name, dir) in Self.candidates {
-            do {
-                let data = try Data(contentsOf: dir.appendingPathComponent("config.json"))
-                guard let config = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let file = config["image"] as? String else {
-                    note("\(name): config.json has no \"image\" key")
-                    continue
-                }
-                let url = dir.appendingPathComponent(file)
-                guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-                      let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-                    note("\(name): cannot decode \(url.path)")
-                    continue
-                }
-                note("#\(instance) \(name): OK read \(url.path)")
-                let imageLayer = CALayer()
-                imageLayer.frame = bounds
-                imageLayer.autoresizingMask = [.layerWidthSizable, .layerHeightSizable]
-                imageLayer.contentsGravity = .resizeAspectFill
-                imageLayer.contents = image
-                root.addSublayer(imageLayer)
-                addLabel("Coverwall spike · \(name) · pid \(getpid()) · instance #\(instance)", to: root)
-                return
-            } catch {
-                note("#\(instance) \(name): \(error.localizedDescription)")
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize != frame.size  // the host re-sets the same size right after init
+        super.setFrameSize(newSize)
+        if running, changed { teardown(); apply() }  // HostApp resizing: rebuild the grid for the new aspect ratio
+    }
+
+    // MARK: - Grid
+
+    private var scale: CGFloat { window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
+
+    private func setUp() {
+        running = true
+        // Re-read every time so `coverwall use` takes effect at the next start, no reload needed.
+        switch SaverContent.load() {
+        case .fallback(let message):
+            log.notice("#\(self.id) fallback: \(message, privacy: .public)")
+            showMessage(message)
+        case .ready(let profile, let tiles):
+            self.profile = profile
+            let grid = GridLayout(screen: bounds.size, columns: profile.grid.columns, rows: profile.grid.rows, preview: compact)
+            var bag = ShuffleBag(pool: tiles.map(\.path), columns: grid.columns, rows: grid.rows, seed: .random(in: .min ... .max))
+            let first = bag.fill()
+            self.bag = bag
+            layer?.backgroundColor = Self.color(profile.background)
+            tileLayers = (0..<first.count).map { index in
+                let frame = grid.frame(ofTile: index).insetBy(dx: profile.gapPoints / 2, dy: profile.gapPoints / 2)
+                return makeTile(frame)
+            }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            tileLayers.forEach { layer?.addSublayer($0.superlayer ?? $0) }
+            CATransaction.commit()
+            pixels = grid.pixelSize(scale: scale, tileMax: profile.tileMaxPixels)
+            decode(first, pixels: pixels) { [weak self] images in
+                guard let self else { return }
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                for (index, image) in images.enumerated() { self.tileLayers[index].contents = image }
+                CATransaction.commit()
+            }
+            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(tiles.count) covers, \(self.pixels) px")
+        }
+    }
+
+    /// Releases everything: timer, decoded images, layers. Instances the host abandons stay like this.
+    private func teardown() {
+        guard running else { return }
+        running = false
+        generation += 1
+        timer?.invalidate()
+        timer = nil
+        bag = nil
+        profile = nil
+        busyUntil = [:]
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer?.sublayers?.forEach { $0.removeFromSuperlayer() }
+        CATransaction.commit()
+        tileLayers = []
+        log.notice("#\(self.id) idle")
+    }
+
+    /// A container with per-tile perspective (so every flip looks the same) holding the image layer.
+    private func makeTile(_ frame: CGRect) -> CALayer {
+        let container = CALayer()
+        container.frame = frame
+        var perspective = CATransform3DIdentity
+        perspective.m34 = -1 / 800
+        container.sublayerTransform = perspective
+        let image = CALayer()
+        image.frame = container.bounds
+        image.contentsGravity = .resizeAspectFill
+        image.masksToBounds = true  // square covers in non-square tiles; a plain rect clip, no offscreen pass
+        image.isOpaque = true
+        container.addSublayer(image)
+        return image
+    }
+
+    private func startTimer(_ interval: TimeInterval) {
+        timer?.invalidate()
+        let timer = Timer(timeInterval: interval, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
+        }
+        timer.tolerance = interval / 10  // lets macOS coalesce wake-ups (§4.6)
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+
+    private func tick() {
+        guard let profile, var bag else { return }
+        let now = CACurrentMediaTime()
+        let swaps = bag.tick(swaps: profile.swapsPerTick, busy: Set(busyUntil.filter { $0.value > now }.keys))
+        self.bag = bag
+        guard !swaps.isEmpty else { return }
+        decode(swaps.map(\.image), pixels: pixels) { [weak self] images in
+            guard let self else { return }
+            let transition = self.activity.transition(preferred: profile.transition)
+            let start = CACurrentMediaTime()
+            for (i, (swap, image)) in zip(swaps, images).enumerated() {
+                // ponytail: a cover that failed to decode keeps the old image on screen; the bag still counts it as shown.
+                guard let image else { continue }
+                self.animate(tile: swap.tile, to: image, transition, at: start + Double(i) * Self.stagger)
             }
         }
-        addLabel("Coverwall: no image found — run spike/seed.sh", to: root)
     }
 
-    private func addLabel(_ text: String, to root: CALayer) {
-        let label = CATextLayer()
-        label.string = text
-        label.fontSize = treatAsPreview ? 8 : 16
-        label.foregroundColor = NSColor(white: 0.8, alpha: 1).cgColor
-        label.backgroundColor = NSColor(white: 0, alpha: 0.5).cgColor
-        label.contentsScale = window?.backingScaleFactor ?? 2
-        label.frame = CGRect(x: 0, y: 0, width: bounds.width, height: label.fontSize * 1.6)
-        label.autoresizingMask = [.layerWidthSizable]
-        root.addSublayer(label)
+    /// Swaps a tile's image entirely in the render server: no callbacks, no per-frame code.
+    private func animate(tile index: Int, to image: CGImage, _ transition: Transition, at begin: CFTimeInterval) {
+        let tile = tileLayers[index]
+        let animation: CAAnimation
+        switch transition {
+        case .flip:
+            // 0 → 90° ease-in, swap contents edge-on, −90° → 0 ease-out.
+            let rotate = CAKeyframeAnimation(keyPath: "transform.rotation.y")
+            rotate.values = [0, Double.pi / 2, -Double.pi / 2, 0]
+            rotate.keyTimes = [0, 0.5, 0.5, 1]
+            rotate.timingFunctions = [.init(name: .easeIn), .init(name: .linear), .init(name: .easeOut)]
+            let swap = CAKeyframeAnimation(keyPath: "contents")
+            swap.values = [tile.contents as Any, image]
+            swap.keyTimes = [0, 0.5, 1]
+            swap.calculationMode = .discrete
+            let group = CAAnimationGroup()
+            group.animations = [rotate, swap]
+            group.duration = Self.flipDuration
+            animation = group
+        case .fade:
+            let fade = CABasicAnimation(keyPath: "contents")
+            fade.fromValue = tile.contents
+            fade.toValue = image
+            fade.duration = Self.fadeDuration
+            animation = fade
+        }
+        animation.beginTime = begin
+        animation.fillMode = .backwards  // keep the old image until this tile's staggered start
+        busyUntil[index] = begin + animation.duration
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        tile.add(animation, forKey: "swap")
+        tile.contents = image
+        CATransaction.commit()
+    }
+
+    /// Decodes off main at tile pixel size; delivers on main only if this run is still current.
+    private func decode(_ paths: [String], pixels: Int, then deliver: @escaping ([CGImage?]) -> Void) {
+        let generation = generation
+        Self.decodeQueue.async { [weak self] in
+            let images = paths.map { Self.image(at: $0, pixels: pixels) }
+            DispatchQueue.main.async {
+                guard let self, self.running, self.generation == generation else { return }
+                deliver(images)
+            }
+        }
+    }
+
+    private nonisolated static func image(at path: String, pixels: Int) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceShouldCacheImmediately: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: pixels]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    // MARK: - Fallback
+
+    private func showMessage(_ message: String) {
+        let text = CATextLayer()
+        text.string = message
+        text.fontSize = compact ? 8 : 14
+        text.alignmentMode = .center
+        text.foregroundColor = CGColor(gray: 0.6, alpha: 1)
+        text.contentsScale = scale
+        text.frame = CGRect(x: 0, y: bounds.midY - text.fontSize, width: bounds.width, height: text.fontSize * 2)
+        text.autoresizingMask = [.layerWidthSizable, .layerMinYMargin, .layerMaxYMargin]
+        layer?.backgroundColor = .black
+        layer?.addSublayer(text)
+    }
+
+    /// `#RRGGBB`, already validated by `Config`; black if not.
+    private static func color(_ hex: String) -> CGColor {
+        guard let value = UInt32(hex.dropFirst(), radix: 16) else { return .black }
+        return CGColor(red: CGFloat(value >> 16 & 0xFF) / 255, green: CGFloat(value >> 8 & 0xFF) / 255,
+                       blue: CGFloat(value & 0xFF) / 255, alpha: 1)
     }
 }

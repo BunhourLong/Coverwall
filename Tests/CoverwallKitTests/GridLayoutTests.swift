@@ -4,34 +4,34 @@ import CoverwallKit
 
 private func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 0.01 }
 
-@Test func coversWideScreenAndCropsRowsEvenly() {
+private func near(_ a: CGSize, _ w: CGFloat, _ h: CGFloat) -> Bool { near(a.width, w) && near(a.height, h) }
+
+@Test func fillsTheScreenEdgeToEdgeWithWholeTiles() {
     let layout = GridLayout(screen: CGSize(width: 1920, height: 1080), columns: 7, rows: 5)
     #expect(layout.columns == 7 && layout.rows == 5)
-    #expect(near(layout.tileSize, 274.29))
-    let first = layout.frame(ofTile: 0)
-    #expect(near(first.minX, 0) && near(first.minY, -145.71))
+    #expect(near(layout.tileSize, 274.29, 216))
+    #expect(layout.frame(ofTile: 0).origin == .zero)
     let last = layout.frame(ofTile: 34)
-    #expect(near(last.maxX, 1920) && near(last.maxY, 1225.71))
+    #expect(near(last.maxX, 1920) && near(last.maxY, 1080))
 }
 
 @Test(arguments: [
-    // width, height, columns, rows → tile, origin x, origin y
-    (2560.0, 1600.0, 4, 3, 640.0, 0.0, -160.0),   // 16:10, rows cropped
-    (3440.0, 1440.0, 8, 3, 480.0, -200.0, 0.0),   // ultrawide, columns cropped
-    (1920.0, 1080.0, 1, 1, 1920.0, 0.0, -420.0),  // 1x1, one big centered cover
+    // width, height, columns, rows → tile width, height
+    (2560.0, 1600.0, 4, 3, 640.0, 533.33),   // 16:10
+    (3440.0, 1440.0, 8, 3, 430.0, 480.0),    // ultrawide
+    (1920.0, 1080.0, 1, 1, 1920.0, 1080.0),  // 1x1, one cover fills the screen
 ])
-func coversOtherAspectRatios(w: CGFloat, h: CGFloat, c: Int, r: Int, tile: CGFloat, x: CGFloat, y: CGFloat) {
+func fillsOtherAspectRatios(w: CGFloat, h: CGFloat, c: Int, r: Int, tileW: CGFloat, tileH: CGFloat) {
     let layout = GridLayout(screen: CGSize(width: w, height: h), columns: c, rows: r)
-    #expect(near(layout.tileSize, tile))
-    let first = layout.frame(ofTile: 0)
-    #expect(near(first.minX, x) && near(first.minY, y))
+    #expect(near(layout.tileSize, tileW, tileH))
+    #expect(layout.frame(ofTile: 0).origin == .zero)
 }
 
-@Test func columnsOnlyDerivesRowsFromScreen() {
+@Test func columnsOnlyRoundsRowsSoTilesStayNearlySquare() {
     let layout = GridLayout(screen: CGSize(width: 1920, height: 1080), columns: 7, rows: nil)
-    #expect(layout.rows == 4)  // ceil(1080 / 274.29)
-    #expect(near(layout.tileSize, 274.29))
-    #expect(near(layout.frame(ofTile: 0).minY, -8.57))
+    #expect(layout.rows == 4)  // 1080 / 274.29 = 3.94
+    #expect(near(layout.tileSize, 274.29, 270))
+    #expect(near(layout.frame(ofTile: 27).maxY, 1080))
 }
 
 @Test func columnsOnlyKeepsRowsWithinLimit() {
@@ -42,8 +42,7 @@ func coversOtherAspectRatios(w: CGFloat, h: CGFloat, c: Int, r: Int, tile: CGFlo
 @Test func previewClampsToFourByThree() {
     let layout = GridLayout(screen: CGSize(width: 320, height: 180), columns: 7, rows: 5, preview: true)
     #expect(layout.columns == 4 && layout.rows == 3)
-    #expect(near(layout.tileSize, 80))
-    #expect(near(layout.frame(ofTile: 0).minY, -30))
+    #expect(near(layout.tileSize, 80, 60))
 }
 
 @Test func zeroFrameGhostInstanceDoesNotCrash() {
@@ -51,10 +50,12 @@ func coversOtherAspectRatios(w: CGFloat, h: CGFloat, c: Int, r: Int, tile: CGFlo
     #expect(layout.rows == 1)
 }
 
-@Test func pixelSizeIsTileTimesScaleCappedByTileMax() {
+@Test func pixelSizeIsTheTilesLongSideTimesScaleCappedByTileMax() {
     let grid = GridLayout(screen: CGSize(width: 1920, height: 1080), columns: 7, rows: 5)
     #expect(grid.pixelSize(scale: 2, tileMax: 1024) == 549)  // ceil(274.29 × 2)
     #expect(grid.pixelSize(scale: 2, tileMax: 400) == 400)
+    let tall = GridLayout(screen: CGSize(width: 1920, height: 1080), columns: 8, rows: 2)  // 240 × 540
+    #expect(tall.pixelSize(scale: 1, tileMax: 1024) == 540)
 }
 
 @Test func cliDefaultTileMaxNeverExceeds2048() {
