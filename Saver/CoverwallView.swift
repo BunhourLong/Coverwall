@@ -33,6 +33,7 @@ final class CoverwallView: ScreenSaverView {
     private var profile: Profile?
     private var tileLayers: [CALayer] = []  // the image layers (each inside a perspective container)
     private var pixels = 0
+    private var decodedScale: CGFloat = 0
     private var busyUntil: [Int: CFTimeInterval] = [:]
 
     private static let flipDuration = 0.6, fadeDuration = 0.8, stagger = 0.15
@@ -136,6 +137,12 @@ final class CoverwallView: ScreenSaverView {
         if running, changed { teardown(); apply() }  // HostApp resizing: rebuild the grid for the new aspect ratio
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // Set up at init (no window yet) used NSScreen.main's scale; rebuild at this screen's (multi-display).
+        if running, window != nil, scale != decodedScale { teardown(); apply() }
+    }
+
     // MARK: - Grid
 
     private var scale: CGFloat { window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
@@ -162,7 +169,8 @@ final class CoverwallView: ScreenSaverView {
             CATransaction.setDisableActions(true)
             tileLayers.forEach { layer?.addSublayer($0.superlayer ?? $0) }
             CATransaction.commit()
-            pixels = grid.pixelSize(scale: scale, tileMax: profile.tileMaxPixels)
+            decodedScale = scale
+            pixels = grid.pixelSize(scale: decodedScale, tileMax: profile.tileMaxPixels)
             decode(first, pixels: pixels) { [weak self] images in
                 guard let self else { return }
                 CATransaction.begin()
@@ -170,7 +178,7 @@ final class CoverwallView: ScreenSaverView {
                 for (index, image) in images.enumerated() { self.tileLayers[index].contents = image }
                 CATransaction.commit()
             }
-            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(tiles.count) covers, \(self.pixels) px")
+            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(tiles.count) covers, \(self.pixels) px @\(self.scale)x window=\(self.window != nil) size=\(NSStringFromSize(self.bounds.size), privacy: .public)")
         }
     }
 
