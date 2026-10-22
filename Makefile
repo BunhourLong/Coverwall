@@ -1,12 +1,14 @@
 # Kit + CLI via SwiftPM; saver + HostApp built with plain swiftc (no Xcode project).
 SAVER   := build/Coverwall.saver
 HOST    := build/CoverwallHost
+# CLI -> $(PREFIX)/bin, saver -> $(PREFIX)/share/coverwall (same layout as the Homebrew formula).
+PREFIX  ?= $(HOME)/.local
 # Only the Kit files the saver may use (CLAUDE.md constraint 8): no Store/TileCache, no networking.
 KIT     := $(addprefix Sources/CoverwallKit/,Config.swift Paths.swift GridLayout.swift ShuffleBag.swift \
              CacheManifest.swift SaverActivity.swift SaverContent.swift)
 SOURCES := $(wildcard Saver/*.swift) $(KIT)
 
-.PHONY: build kit test install reload host clean
+.PHONY: build kit test install uninstall reload host clean
 
 build: kit $(SAVER) $(HOST)
 
@@ -35,9 +37,17 @@ host: $(HOST)
 	./$(HOST)
 
 install: build
-	mkdir -p "$(HOME)/Library/Screen Savers"
-	rm -rf "$(HOME)/Library/Screen Savers/Coverwall.saver"
-	cp -R $(SAVER) "$(HOME)/Library/Screen Savers/"
+	swift build -c release
+	mkdir -p "$(PREFIX)/bin" "$(PREFIX)/share/coverwall"
+	cp "$$(swift build -c release --show-bin-path)/coverwall" "$(PREFIX)/bin/"
+	rm -rf "$(PREFIX)/share/coverwall/Coverwall.saver"
+	cp -R $(SAVER) "$(PREFIX)/share/coverwall/"
+	"$(PREFIX)/bin/coverwall" install
+	@case ":$$PATH:" in *":$(PREFIX)/bin:"*) ;; *) echo "note: $(PREFIX)/bin is not on your PATH — add it to use \`coverwall\`";; esac
+
+uninstall:
+	-"$(PREFIX)/bin/coverwall" uninstall
+	rm -rf "$(PREFIX)/bin/coverwall" "$(PREFIX)/share/coverwall"
 
 reload:
 	-killall legacyScreenSaver

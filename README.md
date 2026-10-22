@@ -7,8 +7,7 @@ Point it at any folder of cover art, pick a grid size, and Coverwall shuffles th
 the screen, flipping or fading tiles one at a time. Inspired by [MusaicFM](https://github.com/obrhoff/MusaicFM),
 but offline and fully under your control from the terminal.
 
-> **Status: early development.** The screen saver spike builds and installs; the `coverwall` CLI
-> is not written yet. The commands below describe the intended v1.
+> **Status:** v1 works from source (`make install`). A Homebrew tap is next.
 
 ## How it works
 
@@ -41,16 +40,17 @@ permissions and copies what the saver needs into the saver's own container:
 ~/Library/Containers/com.apple.ScreenSaver.Engine.legacyScreenSaver/Data/Library/Application Support/Coverwall/
 ```
 
-## Features (v1)
+## Features
 
 - **Any local folder** of jpg, jpeg, png, heic, webp or tiff images. Unreadable files are skipped and reported.
-- **Any grid** from `1x1` to `16x16`. Tiles are always square; the grid scales to cover the
-  screen and is centered, with overflow cropped. `1x1` is a single crossfading cover.
+- **Any grid** from `1x1` to `16x16`. Whole tiles fill the screen edge to edge; each cover fills its
+  tile (center-cropped). Give only `--columns` and the rows fit each screen. `1x1` is a single cover.
 - **Smart shuffling.** With more images than tiles (say 100 images on a 7×5 grid), no cover
   appears twice on screen. Tiles that just changed aren't picked again right away.
-- **Flip or fade** transitions, with configurable interval and swaps per tick.
+- **Flip or fade** transitions, identical on every tile. Reduce Motion always fades.
 - **Multiple profiles**, switched with one command.
 - **Multi-display aware** — each screen gets its own shuffle and is decoded at its own resolution.
+- **Cold when idle** — no timers or decoded images unless the saver is actually on screen.
 - **Calm by default** — a missing or empty profile shows a dark screen with a one-line hint, never a crash.
 - **Offline.** No network, no telemetry.
 
@@ -61,46 +61,51 @@ permissions and copies what the saver needs into the saver's own container:
 
 ## Install
 
-From source:
-
 ```sh
 git clone https://github.com/BunhourLong/Coverwall.git
 cd Coverwall
-make install   # builds Coverwall.saver and copies it into ~/Library/Screen Savers
-make reload    # makes macOS pick up the new bundle
+make install
 ```
 
-Then open **System Settings → Screen Saver** and choose **Coverwall** under *Other*.
+This builds everything, puts `coverwall` in `~/.local/bin` and the saver bundle in
+`~/.local/share/coverwall`, then runs `coverwall install`, which copies `Coverwall.saver` into
+`~/Library/Screen Savers` and restarts the screen saver host. Install somewhere else with
+`make install PREFIX=/usr/local`. If `make` says the `bin` folder isn't on your `PATH`, add it.
 
 Locally built bundles aren't quarantined, so no Gatekeeper workarounds are needed.
-A Homebrew tap (`brew install bunhourlong/tap/coverwall && coverwall install`) is planned.
 
-## Usage (planned)
+## First run
 
 ```sh
 coverwall add macmiller ~/Documents/MacMiller --grid 7x5
 # macmiller: 100 images (3 skipped, 2 duplicates) → 7x5 grid, 35 visible
 
-coverwall use macmiller      # make it the active profile
-coverwall preview            # start the screen saver now
+coverwall settings    # pick Coverwall (under "Other")
+coverwall preview     # start the screen saver now
 ```
+
+`coverwall settings` opens **System Settings → Wallpaper** on macOS 26 (the screen saver picker
+moved there) and **System Settings → Screen Saver** on macOS 14–15. The first profile you add
+becomes the active one.
+
+## Commands
 
 | Command | What it does |
 |---|---|
 | `coverwall add <name> <folder> [--grid CxR \| --columns C] [--interval s] [--transition flip\|fade] [--tile-max px]` | Create a profile and build its cache |
-| `coverwall use <name>` | Set the active profile |
-| `coverwall set [<name>] [--grid ...] [--interval ...] [--transition ...]` | Change a profile's settings |
-| `coverwall sync [<name>]` | Re-scan the source folder (incremental) |
-| `coverwall list [--json]` | List profiles |
-| `coverwall remove <name>` | Delete a profile and its cache |
+| `coverwall use <name>` | Set the active profile — shows the next time the saver starts |
+| `coverwall set [<name>] [--grid ...] [--columns ...] [--interval ...] [--transition ...] [--tile-max ...]` | Change a profile's settings (default: the active one) |
+| `coverwall sync [<name>]` | Re-scan the folder after you add, change or delete covers |
+| `coverwall list` | List profiles; `*` marks the active one |
+| `coverwall remove <name>` | Delete a profile and its cache (your folder is untouched) |
 | `coverwall install` / `uninstall` | Add or remove `Coverwall.saver` in `~/Library/Screen Savers` |
 | `coverwall preview` | Start the screen saver now |
-| `coverwall settings` | Open System Settings → Screen Saver |
-| `coverwall reload` | Restart `legacyScreenSaver` so changes take effect |
-| `coverwall doctor [--json]` | Check install, data dir, config, cache and stray processes |
+| `coverwall settings` | Open the screen saver settings |
+| `coverwall reload` | Restart `legacyScreenSaver` so macOS loads the newest bundle |
+| `coverwall doctor` | Check install, data dir, config, caches and stray processes |
 
-Every command prints readable output by default, takes `--json` for scripting, and exits
-non-zero on error.
+`add`, `sync`, `list` and `doctor` take `--json` for scripting. Every command exits non-zero on
+error, and the error says what to do next. `coverwall help <command>` shows all options.
 
 ### Configuration
 
@@ -125,19 +130,41 @@ Profiles live in a versioned `config.json` in the data dir. The CLI manages it, 
 }
 ```
 
+## Troubleshooting
+
+Start with `coverwall doctor`: every ✗ line says how to fix it.
+
+| Symptom | Fix |
+|---|---|
+| Coverwall isn't in the screen saver list | `coverwall install`, then quit and reopen System Settings |
+| Apple's default saver shows instead of Coverwall | macOS sometimes drops the selection after a reload — pick Coverwall again (`coverwall settings`) |
+| Old profile or settings still showing | `coverwall reload` |
+| Dark screen saying "no profile" | `coverwall add <name> <folder>` or `coverwall use <name>` |
+| New covers in the folder don't show | `coverwall sync` |
+| `doctor` reports several `legacyScreenSaver` processes | `coverwall reload` |
+
+## Uninstall
+
+```sh
+coverwall uninstall   # removes the saver; profiles and cache stay
+make uninstall        # (in the source folder) also removes coverwall from ~/.local
+```
+
+To delete profiles and cached covers too, remove the data dir shown above.
+
 ## Development
 
 ```sh
-make build    # build Coverwall.saver into build/
-make install  # copy it into ~/Library/Screen Savers
+make build    # Kit + CLI + Coverwall.saver + dev host app, into build/
+make test     # swift test
+make host     # run the saver in a normal window for fast iteration
+make install  # as above
 make reload   # killall legacyScreenSaver
 make clean    # remove build/
 ```
 
-Project layout (target):
-
 ```
-Sources/CoverwallKit/   shared, pure Swift: config, grid math, shuffling, paths, cache manifest
+Sources/CoverwallKit/   shared, pure Swift: config, grid math, shuffling, paths, cache, install
 Sources/coverwall/      CLI (Swift Argument Parser)
 Saver/                  CoverwallView (ScreenSaverView) + Info.plist
 HostApp/                dev-only app that shows the saver in a normal window
@@ -146,15 +173,13 @@ Tests/CoverwallKitTests/
 
 ## Not in scope (v1)
 
-- Spotify, Last.fm or Apple Music integration — use MusaicFM for that.
+- Last.fm or Apple Music integration — use MusaicFM for that. (An optional, CLI-side Spotify
+  source may come later; the saver stays offline either way.)
 - A GUI preferences app. The terminal is the interface.
 - Selecting Coverwall as the active screen saver automatically. `coverwall settings` opens the pane instead.
 
 ## Roadmap
 
-1. Platform spike — saver loads images from its container, survives the Sonoma/Tahoe lifecycle *(in progress)*
-2. `CoverwallKit` — config, grid layout, shuffle bag, with tests
-3. `coverwall` CLI and the image cache pipeline
-4. Full saver renderer, transitions, multi-display, dev host app
-5. Install flow and Homebrew tap
-6. Later: cover art pulled from audio files, hero tiles, Ken Burns mode
+1. ~~Platform spike~~, ~~`CoverwallKit`~~, ~~CLI + cache pipeline~~, ~~saver renderer + dev host app~~, ~~install flow~~
+2. Homebrew tap: `brew install bunhourlong/tap/coverwall && coverwall install`
+3. Later: cover art pulled from audio files, hero tiles

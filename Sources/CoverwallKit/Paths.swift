@@ -13,6 +13,11 @@ public enum Paths {
         return base.appendingPathComponent("Library/Application Support/Coverwall", isDirectory: true)
     }
 
+    /// CLI only (in the sandbox the home dir is the container).
+    public static var installedSaver: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Screen Savers/Coverwall.saver")
+    }
+
     public static func config(in dir: URL = dataDir) -> URL { dir.appendingPathComponent("config.json") }
     public static func profile(_ name: String, in dir: URL = dataDir) -> URL { dir.appendingPathComponent("profiles/\(name)", isDirectory: true) }
     public static func manifest(_ name: String, in dir: URL = dataDir) -> URL { profile(name, in: dir).appendingPathComponent("manifest.json") }

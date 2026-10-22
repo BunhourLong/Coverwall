@@ -8,7 +8,7 @@ struct Coverwall: ParsableCommand {
         commandName: "coverwall",
         abstract: "Control the Coverwall album-cover screen saver.",
         subcommands: [Add.self, Use.self, SetCommand.self, Sync.self, List.self, Remove.self,
-                      Doctor.self, Reload.self, Preview.self, Settings.self])
+                      Install.self, Uninstall.self, Doctor.self, Reload.self, Preview.self, Settings.self])
 }
 
 // MARK: - Profiles
@@ -137,6 +137,29 @@ extension Transition: ExpressibleByArgument {}
 
 // MARK: - System
 
+struct Install: ParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Copy Coverwall.saver into ~/Library/Screen Savers and reload the screen saver host.")
+
+    func run() throws {
+        guard let saver = Bundle.main.executableURL.flatMap(Installer.bundledSaver(executable:)) else {
+            throw ValidationError("no built Coverwall.saver next to this coverwall — run `make install` in the source folder")
+        }
+        try Installer.install(saver)
+        try reload()
+        print("installed \(Paths.installedSaver.path) — pick Coverwall in System Settings (`coverwall settings`)")
+    }
+}
+
+struct Uninstall: ParsableCommand {
+    static let configuration = CommandConfiguration(abstract: "Remove Coverwall.saver from ~/Library/Screen Savers (profiles and cache stay).")
+
+    func run() throws {
+        guard try Installer.uninstall() else { return print("Coverwall.saver wasn't installed — nothing to remove") }
+        try reload()
+        print("uninstalled — your profiles and cache stay in \(Paths.dataDir.path); delete that folder to remove them too")
+    }
+}
+
 struct Doctor: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Check the install, data dir, config and caches.")
     @Flag(help: "Print as JSON.") var json = false
@@ -153,9 +176,9 @@ struct Doctor: ParsableCommand {
         let os = ProcessInfo.processInfo.operatingSystemVersion
         check("macOS", ProcessInfo.processInfo.isOperatingSystemAtLeast(.init(majorVersion: 14, minorVersion: 6, patchVersion: 0)),
               "\(os.majorVersion).\(os.minorVersion).\(os.patchVersion) (needs 14.6 or later)")
-        let saver = fm.homeDirectoryForCurrentUser.appendingPathComponent("Library/Screen Savers/Coverwall.saver")
+        let saver = Paths.installedSaver
         let installed = fm.fileExists(atPath: saver.path)
-        check("saver installed", installed, installed ? saver.path : "not in ~/Library/Screen Savers — run `make install`")
+        check("saver installed", installed, installed ? saver.path : "not in ~/Library/Screen Savers — run `coverwall install`")
         let dir = Paths.dataDir
         let writable = (try? fm.createDirectory(at: dir, withIntermediateDirectories: true)) != nil && fm.isWritableFile(atPath: dir.path)
         check("data dir writable", writable, dir.path)
@@ -189,8 +212,7 @@ struct Reload: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Quit the screen saver host so macOS loads the newest bundle next time.")
 
     func run() throws {
-        let killed = try shell("/usr/bin/killall", "legacyScreenSaver").status == 0
-        print(killed ? "reloaded — macOS restarts the screen saver host when it's next needed" : "legacyScreenSaver wasn't running — nothing to reload")
+        print(try reload() ? "reloaded — macOS restarts the screen saver host when it's next needed" : "legacyScreenSaver wasn't running — nothing to reload")
     }
 }
 
@@ -242,6 +264,9 @@ func printJSON(_ value: some Encodable) throws {
 }
 
 func warn(_ line: String) { FileHandle.standardError.write(Data((line + "\n").utf8)) }
+
+/// Quits the screen saver host so macOS loads the newest bundle; false if it wasn't running.
+@discardableResult func reload() throws -> Bool { try shell("/usr/bin/killall", "legacyScreenSaver").status == 0 }
 
 /// Runs a system tool; output is stdout only.
 func shell(_ tool: String, _ arguments: String...) throws -> (status: Int32, output: String) {

@@ -45,3 +45,9 @@ private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int
     let missing = try coverwall("add", "mac", dirs.source.appendingPathComponent("nope").path, data: dirs.data)
     #expect(missing.status != 0 && missing.err.contains("not found"), "\(missing.err)")
 }
+
+@Test func installWithoutABuiltSaverSaysHowToGetOne() throws {
+    // The test binary has no ../share/coverwall, so this fails before touching ~/Library or the host.
+    let install = try coverwall("install", data: try scratch().data)
+    #expect(install.status != 0 && install.err.contains("make install"), "\(install.err)")
+}
