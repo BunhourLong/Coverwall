@@ -196,3 +196,7 @@ Tests/CoverwallKitTests/
 1. ~~Platform spike~~, ~~`CoverwallKit`~~, ~~CLI + cache pipeline~~, ~~saver renderer + dev host app~~, ~~install flow~~
 2. ~~Homebrew tap~~ (`brew install bunhourlong/tap/coverwall && coverwall install`)
 3. Later: cover art pulled from audio files, hero tiles
+
+## License
+
+MIT — see [LICENSE](LICENSE).
