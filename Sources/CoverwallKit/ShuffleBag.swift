@@ -1,18 +1,24 @@
 /// Which image goes on which tile (PLAN.md §4.3). Images are opaque ids (cache file names).
-/// Tile indices match `GridLayout.frame(ofTile:)`.
+/// Tile indices match `GridLayout.frame(ofTile:)` / `GridLayout.slots`.
 public struct ShuffleBag: Sendable {
     public private(set) var visible: [String] = []
     private let pool: [String]
     private let columns: Int
     private let tiles: Int
+    private let neighbourLists: [[Int]]
     private var bag: [String] = []
     private var recent: [Int] = []
     private var rng: SplitMix64
 
     public init(pool: [String], columns: Int, rows: Int, seed: UInt64) {
+        self.init(pool: pool, slots: Slot.layout(columns: columns, rows: rows, heroes: 0, seed: 0), seed: seed)
+    }
+
+    public init(pool: [String], slots: [Slot], seed: UInt64) {
         self.pool = pool
-        self.columns = columns
-        tiles = columns * rows
+        columns = slots.map { $0.column + $0.span }.max() ?? 0
+        tiles = slots.count
+        neighbourLists = Slot.neighbours(slots)
         rng = SplitMix64(state: seed)
     }
 
@@ -53,11 +59,7 @@ public struct ShuffleBag: Sendable {
         return Set((neighbours(of: tile) + [tile]).filter { $0 < visible.count }.map { visible[$0] })
     }
 
-    private func neighbours(of tile: Int) -> [Int] {
-        let column = tile % columns
-        return [tile - columns, tile + columns, column > 0 ? tile - 1 : -1, column < columns - 1 ? tile + 1 : -1]
-            .filter { (0..<tiles).contains($0) }
-    }
+    private func neighbours(of tile: Int) -> [Int] { neighbourLists[tile] }
 
     /// Next bag image that isn't forbidden; refills the bag once if it runs dry.
     private mutating func draw(forbidden: Set<String>) -> String? {

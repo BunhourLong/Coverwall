@@ -68,10 +68,13 @@ public struct Profile: Codable, Equatable, Sendable {
     public var tileMaxPixels: Int
     public var background: String
     public var gapPoints: Double
+    /// 2×2 tiles placed where they fit; optional so older configs stay valid v1.
+    public var heroes: Int?
 
     /// Defaults are the CLI's (PLAN.md §4.1); `tileMaxPixels` is normally computed from the displays.
     public init(source: String, grid: Grid = Grid(columns: 7, rows: 5), intervalSeconds: Double = 4, swapsPerTick: Int = 1,
-                transition: Transition = .flip, tileMaxPixels: Int = 1024, background: String = "#000000", gapPoints: Double = 0) {
+                transition: Transition = .flip, tileMaxPixels: Int = 1024, background: String = "#000000", gapPoints: Double = 0,
+                heroes: Int? = nil) {
         self.source = source
         self.grid = grid
         self.intervalSeconds = intervalSeconds
@@ -80,6 +83,7 @@ public struct Profile: Codable, Equatable, Sendable {
         self.tileMaxPixels = tileMaxPixels
         self.background = background
         self.gapPoints = gapPoints
+        self.heroes = heroes
     }
 
     func validate(name: String) throws {
@@ -96,6 +100,7 @@ public struct Profile: Codable, Equatable, Sendable {
         try check(background.count == 7 && background.first == "#" && background.dropFirst().allSatisfy(\.isHexDigit),
                   "background", "#RRGGBB")
         try check(gapPoints >= 0, "gapPoints", ">= 0")
+        try check((heroes ?? 0) >= 0, "heroes", ">= 0")
     }
 }
 

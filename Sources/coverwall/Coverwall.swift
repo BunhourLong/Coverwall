@@ -52,7 +52,7 @@ struct SetCommand: ParsableCommand {
         let store = Store()
         let report = try store.update(name) { options.apply(to: &$0, fresh: false) }
         let (name, profile) = try store.resolve(name, in: store.load())
-        print("\(name): \(gridText(profile.grid)), every \(profile.intervalSeconds.formatted())s, \(profile.transition), tiles ≤ \(profile.tileMaxPixels) px")
+        print("\(name): \(gridText(profile)), every \(profile.intervalSeconds.formatted())s, \(profile.transition), tiles ≤ \(profile.tileMaxPixels) px")
         if let report { try show(name, profile, report, json: false) }
     }
 }
@@ -84,7 +84,7 @@ struct List: ParsableCommand {
         if json { return try printJSON(entries) }
         if entries.isEmpty { return print("no profiles — add one with `coverwall add <name> <folder>`") }
         for e in entries {
-            print("\(e.active ? "*" : " ") \(e.name)  \(gridText(e.profile.grid))  \(e.images) images  \(e.profile.source)")
+            print("\(e.active ? "*" : " ") \(e.name)  \(gridText(e.profile))  \(e.images) images  \(e.profile.source)")
         }
     }
 }
@@ -106,13 +106,14 @@ struct ProfileOptions: ParsableArguments {
     @Option(help: "Columns only; rows fit each screen.") var columns: Int?
     @Option(help: "Seconds between swaps.") var interval: Double?
     @Option(help: "flip or fade.") var transition: Transition?
+    @Option(help: "2x2 hero tiles placed where they fit (0 = none); caches tiles at hero size.") var heroes: Int?
     @Option(name: .customLong("tile-max"), help: "Cached tile size in pixels (default: sharp on your best display).") var tileMax: Int?
 
     func validate() throws {
         if grid != nil && columns != nil { throw ValidationError("use --grid or --columns, not both") }
     }
 
-    var changesSomething: Bool { grid != nil || columns != nil || interval != nil || transition != nil || tileMax != nil }
+    var changesSomething: Bool { grid != nil || columns != nil || interval != nil || transition != nil || tileMax != nil || heroes != nil }
 
     /// New profiles and grid changes get a tile size computed from the displays unless --tile-max is given.
     func apply(to profile: inout Profile, fresh: Bool) {
@@ -120,11 +121,13 @@ struct ProfileOptions: ParsableArguments {
         if let newGrid { profile.grid = newGrid }
         if let interval { profile.intervalSeconds = interval }
         if let transition { profile.transition = transition }
+        if let heroes { profile.heroes = heroes }
         if let tileMax {
             profile.tileMaxPixels = tileMax
-        } else if fresh || newGrid != nil {
+        } else if fresh || newGrid != nil || heroes != nil {
             let displays = MainActor.assumeIsolated { NSScreen.screens.map { (points: $0.frame.size, scale: $0.backingScaleFactor) } }
-            profile.tileMaxPixels = GridLayout.defaultTileMax(columns: profile.grid.columns, rows: profile.grid.rows, displays: displays)
+            profile.tileMaxPixels = GridLayout.defaultTileMax(columns: profile.grid.columns, rows: profile.grid.rows,
+                                                               heroes: profile.heroes ?? 0, displays: displays)
         }
     }
 }
@@ -246,14 +249,18 @@ func show(_ name: String, _ profile: Profile, _ report: SyncReport, json: Bool) 
     if json { return try printJSON(report) }
     let notes = [report.skipped.isEmpty ? nil : "\(report.skipped.count) skipped",
                  report.duplicates == 0 ? nil : "\(report.duplicates) duplicates"].compactMap { $0 }
-    let visible = profile.grid.rows.map { "\(gridText(profile.grid)) grid, \(profile.grid.columns * $0) visible" }
-        ?? "\(gridText(profile.grid)), rows fit each screen"
+    let visible = profile.grid.rows.map { rows in
+        "\(gridText(profile)) grid, \(Slot.layout(columns: profile.grid.columns, rows: rows, heroes: profile.heroes ?? 0, seed: 0).count) visible"
+    } ?? "\(gridText(profile)), rows fit each screen"
     print("\(name): \(report.images) images" + (notes.isEmpty ? "" : " (\(notes.joined(separator: ", ")))") + " → \(visible)")
     for path in report.skipped { warn("  skipped (unreadable or not an image): \(path)") }
     if report.images == 0 { warn("  no covers found — supported: jpg, jpeg, png, heic, webp, tiff, and mp3/m4a/flac with embedded art") }
 }
 
-func gridText(_ grid: Grid) -> String { grid.rows.map { "\(grid.columns)x\($0)" } ?? "\(grid.columns) columns" }
+func gridText(_ profile: Profile) -> String {
+    let grid = profile.grid
+    return (grid.rows.map { "\(grid.columns)x\($0)" } ?? "\(grid.columns) columns") + (profile.heroes.map { $0 > 0 ? " + \($0) heroes" : "" } ?? "")
+}
 
 func tileCount(_ name: String) -> Int { (try? FileManager.default.contentsOfDirectory(atPath: Paths.tiles(name).path).count) ?? 0 }
 

@@ -70,3 +70,69 @@ func fillsOtherAspectRatios(w: CGFloat, h: CGFloat, c: Int, r: Int, tileW: CGFlo
     #expect(GridLayout.defaultTileMax(columns: 1, rows: 1, displays: displays) == 2048)
     #expect(GridLayout.defaultTileMax(columns: 7, rows: 5, displays: []) == 1024)       // headless
 }
+
+// MARK: - Hero tiles
+
+private let screen = CGSize(width: 1920, height: 1080)
+
+private func cells(_ slot: Slot, columns: Int) -> [Int] {
+    (slot.row..<slot.row + slot.span).flatMap { row in (slot.column..<slot.column + slot.span).map { row * columns + $0 } }
+}
+
+@Test func heroesAreTwoByTwoAndAllTilesCoverEveryCellOnce() throws {
+    let layout = GridLayout(screen: screen, columns: 7, rows: 5, heroes: 3, seed: 1)
+    #expect(layout.slots.filter { $0.span == 2 }.count == 3)
+    #expect(layout.slots.flatMap { cells($0, columns: 7) }.sorted() == Array(0..<35))
+    let hero = try #require(layout.slots.firstIndex { $0.span == 2 })
+    #expect(near(layout.frame(ofTile: hero).size, 548.57, 432))
+}
+
+@Test func heroesNeverTouchEachOther() {
+    for seed in UInt64(0)..<50 {
+        let slots = GridLayout(screen: screen, columns: 7, rows: 5, heroes: 4, seed: seed).slots
+        let neighbours = Slot.neighbours(slots)
+        for hero in slots.indices where slots[hero].span == 2 {
+            #expect(neighbours[hero].allSatisfy { slots[$0].span == 1 })
+        }
+    }
+}
+
+@Test func heroesOnlyWhereTheyFitAndTheSameSeedGivesTheSameLayout() {
+    #expect(GridLayout(screen: screen, columns: 1, rows: 1, heroes: 3, seed: 0).slots == [Slot(column: 0, row: 0, span: 1)])
+    #expect(GridLayout(screen: screen, columns: 3, rows: 2, heroes: 5, seed: 0).slots.filter { $0.span == 2 }.count == 1)
+    #expect(GridLayout(screen: screen, columns: 7, rows: 5, heroes: 3, seed: 7).slots
+            == GridLayout(screen: screen, columns: 7, rows: 5, heroes: 3, seed: 7).slots)
+}
+
+@Test func plainGridTilesAreRowMajorAndNeighboursShareAnEdge() {
+    let slots = GridLayout(screen: screen, columns: 3, rows: 2).slots
+    #expect(slots.map { cells($0, columns: 3) } == (0..<6).map { [$0] })
+    #expect(Slot.neighbours(slots).map { $0.sorted() } == [[1, 3], [0, 2, 4], [1, 5], [0, 4], [1, 3, 5], [2, 4]])
+}
+
+@Test func aHeroNeighboursEveryTileAlongItsEdges() throws {
+    // 3x2 with one hero: the hero plus one column of two stacked tiles, whichever side it lands.
+    let slots = GridLayout(screen: screen, columns: 3, rows: 2, heroes: 1, seed: 3).slots
+    let neighbours = Slot.neighbours(slots)
+    let hero = try #require(slots.firstIndex { $0.span == 2 })
+    for tile in slots.indices { #expect(Set(neighbours[tile]) == Set(slots.indices).subtracting([tile])) }
+    #expect(neighbours[hero].count == 2)
+}
+
+@Test func heroPixelSizeIsTwiceTheTileCappedByTileMax() {
+    let grid = GridLayout(screen: screen, columns: 7, rows: 5)
+    #expect(grid.pixelSize(scale: 2, tileMax: 2048, span: 2) == 1098)  // ceil(548.57 × 2)
+    #expect(grid.pixelSize(scale: 2, tileMax: 1024, span: 2) == 1024)
+}
+
+@Test func defaultTileMaxWithHeroesCachesAtHeroSize() {
+    let displays = [(points: CGSize(width: 2560, height: 1440), scale: CGFloat(2))]
+    #expect(GridLayout.defaultTileMax(columns: 7, rows: 5, heroes: 3, displays: displays) == 1463)  // ceil(2560 / 7 × 4)
+    #expect(GridLayout.defaultTileMax(columns: 7, rows: 5, heroes: 0, displays: displays) == 732)
+}
+
+@Test func threeHeroesAlwaysFitOnTheDefaultGrid() {
+    for seed in UInt64(0)..<200 {
+        #expect(Slot.layout(columns: 7, rows: 5, heroes: 3, seed: seed).filter { $0.span == 2 }.count == 3, "seed \(seed)")
+    }
+}

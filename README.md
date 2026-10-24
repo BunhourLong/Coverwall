@@ -47,6 +47,9 @@ permissions and copies what the saver needs into the saver's own container:
   (tracks sharing a cover are deduplicated). Tracks without art are ignored.
 - **Any grid** from `1x1` to `16x16`. Whole tiles fill the screen edge to edge; each cover fills its
   tile (center-cropped). Give only `--columns` and the rows fit each screen. `1x1` is a single cover.
+- **Hero tiles.** `--heroes 3` mixes in up to three 2×2 covers, placed where they fit without touching,
+  like the old iTunes saver. Their positions change at every start. The cache then stores hero-size tiles so
+  they stay sharp; `--heroes 0` turns them off.
 - **Smart shuffling.** With more images than tiles (say 100 images on a 7×5 grid), no cover
   appears twice on screen. Tiles that just changed aren't picked again right away.
 - **Flip or fade** transitions, identical on every tile. Reduce Motion always fades.
@@ -107,9 +110,9 @@ becomes the active one.
 
 | Command | What it does |
 |---|---|
-| `coverwall add <name> <folder> [--grid CxR \| --columns C] [--interval s] [--transition flip\|fade] [--tile-max px]` | Create a profile and build its cache |
+| `coverwall add <name> <folder> [--grid CxR \| --columns C] [--interval s] [--transition flip\|fade] [--heroes N] [--tile-max px]` | Create a profile and build its cache |
 | `coverwall use <name>` | Set the active profile — shows the next time the saver starts |
-| `coverwall set [<name>] [--grid ...] [--columns ...] [--interval ...] [--transition ...] [--tile-max ...]` | Change a profile's settings (default: the active one) |
+| `coverwall set [<name>] [--grid ...] [--columns ...] [--interval ...] [--transition ...] [--heroes N] [--tile-max ...]` | Change a profile's settings (default: the active one) |
 | `coverwall sync [<name>]` | Re-scan the folder after you add, change or delete covers |
 | `coverwall list` | List profiles; `*` marks the active one |
 | `coverwall remove <name>` | Delete a profile and its cache (your folder is untouched) |

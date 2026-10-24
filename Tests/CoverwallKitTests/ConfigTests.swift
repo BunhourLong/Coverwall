@@ -33,6 +33,7 @@ let sampleJSON = """
     #expect(profile.tileMaxPixels == 1024)
     #expect(profile.background == "#000000")
     #expect(profile.gapPoints == 0)
+    #expect(profile.heroes == nil)  // optional: configs without it stay valid v1
 }
 
 /// Field named in the validation error after replacing `old` with `new` in the sample.
@@ -58,6 +59,7 @@ private func invalidField(_ old: String, _ new: String) throws -> String? {
     (##""#000000""##, #""black""#, "background"),
     (##""#000000""##, ##""#00000G""##, "background"),
     (#""gapPoints": 0"#, #""gapPoints": -1"#, "gapPoints"),
+    (#""gapPoints": 0"#, #""gapPoints": 0, "heroes": -1"#, "heroes"),
     (#""source": "/Users/capon/Documents/MacMiller""#, #""source": "relative/path""#, "source"),
 ])
 func rejectsInvalidProfileValues(old: String, new: String, field: String) throws {

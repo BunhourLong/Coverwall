@@ -32,7 +32,7 @@ final class CoverwallView: ScreenSaverView {
     private var bag: ShuffleBag?
     private var profile: Profile?
     private var tileLayers: [CALayer] = []  // the image layers (each inside a perspective container)
-    private var pixels = 0
+    private var pixels: [Int] = []  // decode size per tile (heroes are bigger)
     private var decodedScale: CGFloat = 0
     private var busyUntil: [Int: CFTimeInterval] = [:]
 
@@ -156,21 +156,23 @@ final class CoverwallView: ScreenSaverView {
             showMessage(message)
         case .ready(_, let profile, let tiles):
             self.profile = profile
-            let grid = GridLayout(screen: bounds.size, columns: profile.grid.columns, rows: profile.grid.rows, preview: compact)
-            var bag = ShuffleBag(pool: tiles.map(\.path), columns: grid.columns, rows: grid.rows, seed: .random(in: .min ... .max))
+            let seed = UInt64.random(in: .min ... .max)
+            let grid = GridLayout(screen: bounds.size, columns: profile.grid.columns, rows: profile.grid.rows, preview: compact,
+                                  heroes: profile.heroes ?? 0, seed: seed)
+            var bag = ShuffleBag(pool: tiles.map(\.path), slots: grid.slots, seed: seed)
             let first = bag.fill()
             self.bag = bag
             layer?.backgroundColor = Self.color(profile.background)
             tileLayers = (0..<first.count).map { index in
                 let frame = grid.frame(ofTile: index).insetBy(dx: profile.gapPoints / 2, dy: profile.gapPoints / 2)
-                return makeTile(frame)
+                return makeTile(frame, span: grid.slots[index].span)
             }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             tileLayers.forEach { layer?.addSublayer($0.superlayer ?? $0) }
             CATransaction.commit()
             decodedScale = scale
-            pixels = grid.pixelSize(scale: decodedScale, tileMax: profile.tileMaxPixels)
+            pixels = grid.slots.map { grid.pixelSize(scale: decodedScale, tileMax: profile.tileMaxPixels, span: $0.span) }
             decode(first, pixels: pixels) { [weak self] images in
                 guard let self else { return }
                 CATransaction.begin()
@@ -178,7 +180,7 @@ final class CoverwallView: ScreenSaverView {
                 for (index, image) in images.enumerated() { self.tileLayers[index].contents = image }
                 CATransaction.commit()
             }
-            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(tiles.count) covers, \(self.pixels) px @\(self.scale)x window=\(self.window != nil) size=\(NSStringFromSize(self.bounds.size), privacy: .public)")
+            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(grid.slots.count) tiles, \(tiles.count) covers, \(self.pixels.min() ?? 0)–\(self.pixels.max() ?? 0) px @\(self.scale)x window=\(self.window != nil) size=\(NSStringFromSize(self.bounds.size), privacy: .public)")
         }
     }
 
@@ -201,11 +203,11 @@ final class CoverwallView: ScreenSaverView {
     }
 
     /// A container with per-tile perspective (so every flip looks the same) holding the image layer.
-    private func makeTile(_ frame: CGRect) -> CALayer {
+    private func makeTile(_ frame: CGRect, span: Int) -> CALayer {
         let container = CALayer()
         container.frame = frame
         var perspective = CATransform3DIdentity
-        perspective.m34 = -1 / 800
+        perspective.m34 = -1 / (800 * CGFloat(span))  // camera distance scales with size: heroes flip like the rest
         container.sublayerTransform = perspective
         let image = CALayer()
         image.frame = container.bounds
@@ -232,7 +234,7 @@ final class CoverwallView: ScreenSaverView {
         let swaps = bag.tick(swaps: profile.swapsPerTick, busy: Set(busyUntil.filter { $0.value > now }.keys))
         self.bag = bag
         guard !swaps.isEmpty else { return }
-        decode(swaps.map(\.image), pixels: pixels) { [weak self] images in
+        decode(swaps.map(\.image), pixels: swaps.map { pixels[$0.tile] }) { [weak self] images in
             guard let self else { return }
             let transition = self.activity.transition(preferred: profile.transition)
             let start = CACurrentMediaTime()
@@ -281,10 +283,10 @@ final class CoverwallView: ScreenSaverView {
     }
 
     /// Decodes off main at tile pixel size; delivers on main only if this run is still current.
-    private func decode(_ paths: [String], pixels: Int, then deliver: @escaping ([CGImage?]) -> Void) {
+    private func decode(_ paths: [String], pixels: [Int], then deliver: @escaping ([CGImage?]) -> Void) {
         let generation = generation
         Self.decodeQueue.async { [weak self] in
-            let images = paths.map { Self.image(at: $0, pixels: pixels) }
+            let images = zip(paths, pixels).map { Self.image(at: $0, pixels: $1) }
             DispatchQueue.main.async {
                 guard let self, self.running, self.generation == generation else { return }
                 deliver(images)

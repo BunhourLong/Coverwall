@@ -82,3 +82,16 @@ private func hasIdenticalNeighbours(_ shown: [String], columns: Int) -> Bool {
     #expect(bag.fill().isEmpty)
     #expect(bag.tick(swaps: 1, busy: []).isEmpty)
 }
+
+@Test func heroLayoutFillsEveryTileAndNeverSwapsNeighboursInOneTick() {
+    let slots = Slot.layout(columns: 7, rows: 5, heroes: 3, seed: 2)
+    let neighbours = Slot.neighbours(slots)
+    var bag = ShuffleBag(pool: pool(100), slots: slots, seed: 9)
+    #expect(bag.fill().count == slots.count)
+    for _ in 0..<300 {
+        let tiles = bag.tick(swaps: 3, busy: []).map(\.tile)
+        #expect(!tiles.isEmpty)
+        #expect(Set(bag.visible).count == slots.count)
+        for tile in tiles { #expect(neighbours[tile].allSatisfy { !tiles.contains($0) }) }
+    }
+}

@@ -28,10 +28,11 @@ public enum SaverContent: Equatable, Sendable {
         case .fallback(let message): return message
         case .ready(let name, let profile, let tiles):
             let grid = profile.grid.rows.map { "\(profile.grid.columns)x\($0)" } ?? "\(profile.grid.columns) columns, rows fit the screen"
+            let heroes = profile.heroes.map { $0 > 0 ? " · \($0) heroes" : "" } ?? ""
             return """
                 Active profile: \(name)
                 Folder: \(profile.source)
-                Grid: \(grid) · every \(profile.intervalSeconds.formatted()) s · \(profile.transition.rawValue)
+                Grid: \(grid)\(heroes) · every \(profile.intervalSeconds.formatted()) s · \(profile.transition.rawValue)
                 \(tiles.count) covers
                 Change it in Terminal: coverwall set, coverwall use <name>
                 """

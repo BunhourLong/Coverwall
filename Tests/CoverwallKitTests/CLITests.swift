@@ -46,6 +46,20 @@ private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int
     #expect(missing.status != 0 && missing.err.contains("not found"), "\(missing.err)")
 }
 
+@Test func heroesAreStoredAndRecomputeTheTileSize() throws {
+    let dirs = try scratch()
+    try writeImage(dirs.source.appendingPathComponent("a.png"), width: 300, height: 300, shade: 0.5)
+    #expect(try coverwall("add", "mac", dirs.source.path, "--tile-max", "100", data: dirs.data).status == 0)
+
+    let set = try coverwall("set", "mac", "--heroes", "3", data: dirs.data)
+    #expect(set.status == 0 && set.out.contains("7x5 + 3 heroes"), "\(set.out) \(set.err)")
+    let sync = try coverwall("sync", "mac", data: dirs.data)
+    #expect(sync.out.contains("7x5 + 3 heroes grid, 26 visible"), "\(sync.out)")  // 35 cells − 3 × 3
+    let profile = try #require(try Store(dataDir: dirs.data).load().profiles["mac"])
+    #expect(profile.heroes == 3)
+    #expect(profile.tileMaxPixels != 100)  // recomputed at hero size, cache re-encoded
+}
+
 @Test func installWithoutABuiltSaverSaysHowToGetOne() throws {
     // The test binary has no ../share/coverwall, so this fails before touching ~/Library or the host.
     let install = try coverwall("install", data: try scratch().data)

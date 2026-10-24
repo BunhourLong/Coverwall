@@ -67,6 +67,10 @@ private func syncedDataDir() throws -> URL {
     config.profiles["mac"]!.grid.rows = nil
     try Store(dataDir: data).save(config)
     #expect(SaverContent.summary(from: data).contains("Grid: 7 columns, rows fit the screen · every 4 s · flip"))
+
+    config.profiles["mac"]!.heroes = 3
+    try Store(dataDir: data).save(config)
+    #expect(SaverContent.summary(from: data).contains("Grid: 7 columns, rows fit the screen · 3 heroes · every 4 s · flip"))
 }
 
 @Test func configureSheetSummaryWithoutAProfileIsTheFallbackMessage() throws {
