@@ -20,6 +20,8 @@ enum HostApp {
         window.center()
         window.makeKeyAndOrderFront(nil)
         view.startAnimation()
+        // `make host ARGS=--sheet`: the System Settings "Options…" sheet.
+        if CommandLine.arguments.contains("--sheet"), let sheet = view.configureSheet { window.beginSheet(sheet) }
 
         let delegate = Delegate()
         app.delegate = delegate

@@ -34,7 +34,7 @@ $(HOST): $(SOURCES) HostApp/HostApp.swift
 	  -o $@ $(SOURCES) HostApp/HostApp.swift
 
 host: $(HOST)
-	./$(HOST)
+	./$(HOST) $(ARGS)
 
 install: build
 	swift build -c release

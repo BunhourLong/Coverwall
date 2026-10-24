@@ -3,7 +3,7 @@ import Foundation
 /// What the saver draws: the active profile's cached tiles, or a calm one-line fallback (PLAN.md §4.4).
 /// Never throws — a broken data dir must not take down `legacyScreenSaver` (CLAUDE.md constraint 4).
 public enum SaverContent: Equatable, Sendable {
-    case ready(Profile, tiles: [URL])
+    case ready(name: String, Profile, tiles: [URL])
     case fallback(String)
 
     private static let noProfile = SaverContent.fallback("Coverwall: no profile — run \"coverwall add <name> <folder>\"")
@@ -19,6 +19,22 @@ public enum SaverContent: Equatable, Sendable {
         let tiles = (manifest?.tiles.keys.sorted() ?? []).map { Paths.tile($0, of: name, in: dir) }
             .filter { FileManager.default.fileExists(atPath: $0.path) }
         guard !tiles.isEmpty else { return .fallback("Coverwall: no covers for '\(name)' — run \"coverwall sync \(name)\"") }
-        return .ready(profile, tiles: tiles)
+        return .ready(name: name, profile, tiles: tiles)
+    }
+
+    /// The configure sheet's read-only text (PLAN.md Phase 6): the active profile, or the fallback message.
+    public static func summary(from dir: URL = Paths.dataDir) -> String {
+        switch load(from: dir) {
+        case .fallback(let message): return message
+        case .ready(let name, let profile, let tiles):
+            let grid = profile.grid.rows.map { "\(profile.grid.columns)x\($0)" } ?? "\(profile.grid.columns) columns, rows fit the screen"
+            return """
+                Active profile: \(name)
+                Folder: \(profile.source)
+                Grid: \(grid) · every \(profile.intervalSeconds.formatted()) s · \(profile.transition.rawValue)
+                \(tiles.count) covers
+                Change it in Terminal: coverwall set, coverwall use <name>
+                """
+        }
     }
 }

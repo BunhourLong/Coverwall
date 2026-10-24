@@ -154,7 +154,7 @@ final class CoverwallView: ScreenSaverView {
         case .fallback(let message):
             log.notice("#\(self.id) fallback: \(message, privacy: .public)")
             showMessage(message)
-        case .ready(let profile, let tiles):
+        case .ready(_, let profile, let tiles):
             self.profile = profile
             let grid = GridLayout(screen: bounds.size, columns: profile.grid.columns, rows: profile.grid.rows, preview: compact)
             var bag = ShuffleBag(pool: tiles.map(\.path), columns: grid.columns, rows: grid.rows, seed: .random(in: .min ... .max))
@@ -299,6 +299,39 @@ final class CoverwallView: ScreenSaverView {
                                         kCGImageSourceShouldCacheImmediately: true,
                                         kCGImageSourceThumbnailMaxPixelSize: pixels]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    // MARK: - Configure sheet (read-only: the CLI is the control surface)
+
+    override var hasConfigureSheet: Bool { true }
+
+    override var configureSheet: NSWindow? {
+        let text = NSTextField(wrappingLabelWithString: SaverContent.summary())
+        text.isSelectable = true
+        let close = NSButton(title: "Close", target: self, action: #selector(closeSheet))
+        close.keyEquivalent = "\r"
+        // Plain constraints, not NSStackView: its cross-axis insets are non-required and lose to the window size.
+        let content = NSView()
+        for view in [text, close] { view.translatesAutoresizingMaskIntoConstraints = false; content.addSubview(view) }
+        NSLayoutConstraint.activate([
+            text.widthAnchor.constraint(equalToConstant: 420),
+            text.topAnchor.constraint(equalTo: content.topAnchor, constant: 20),
+            text.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 20),
+            text.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -20),
+            close.topAnchor.constraint(equalTo: text.bottomAnchor, constant: 12),
+            close.trailingAnchor.constraint(equalTo: text.trailingAnchor),
+            close.bottomAnchor.constraint(equalTo: content.bottomAnchor, constant: -20),
+        ])
+        let sheet = NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+        sheet.isReleasedWhenClosed = false
+        sheet.contentView = content
+        return sheet
+    }
+
+    // sheetParent, not NSApp.endSheet: the latter is reported not to dismiss sheets in legacyScreenSaver.
+    @objc private func closeSheet(_ sender: NSButton) {
+        guard let sheet = sender.window else { return }
+        if let parent = sheet.sheetParent { parent.endSheet(sheet) } else { sheet.orderOut(nil) }
     }
 
     // MARK: - Fallback

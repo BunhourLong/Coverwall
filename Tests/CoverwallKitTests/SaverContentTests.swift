@@ -14,7 +14,7 @@ private func syncedDataDir() throws -> URL {
 @Test func activeProfileLoadsWithItsCachedTiles() throws {
     let data = try syncedDataDir()
 
-    guard case .ready(let loaded, let tiles) = SaverContent.load(from: data) else { Issue.record("not ready"); return }
+    guard case .ready("mac", let loaded, let tiles) = SaverContent.load(from: data) else { Issue.record("not ready"); return }
 
     #expect(loaded.grid == Grid(columns: 7, rows: 5))
     #expect(tiles.count == 2)
@@ -42,11 +42,33 @@ private func syncedDataDir() throws -> URL {
     let data = try syncedDataDir()
     let tiles = try FileManager.default.contentsOfDirectory(at: Paths.tiles("mac", in: data), includingPropertiesForKeys: nil)
     try FileManager.default.removeItem(at: tiles[0])  // a tile vanishing under the saver is skipped
-    guard case .ready(_, let left) = SaverContent.load(from: data) else { Issue.record("not ready"); return }
+    guard case .ready(_, _, let left) = SaverContent.load(from: data) else { Issue.record("not ready"); return }
     #expect(left.count == 1)
 
     try FileManager.default.removeItem(at: tiles[1])
     #expect(SaverContent.load(from: data) == .fallback("Coverwall: no covers for 'mac' — run \"coverwall sync mac\""))
     try FileManager.default.removeItem(at: Paths.manifest("mac", in: data))
     #expect(SaverContent.load(from: data) == .fallback("Coverwall: no covers for 'mac' — run \"coverwall sync mac\""))
+}
+
+@Test func configureSheetSummaryShowsTheActiveProfile() throws {
+    let data = try syncedDataDir()
+    let source = try Store(dataDir: data).load().profiles["mac"]!.source
+
+    #expect(SaverContent.summary(from: data) == """
+        Active profile: mac
+        Folder: \(source)
+        Grid: 7x5 · every 4 s · flip
+        2 covers
+        Change it in Terminal: coverwall set, coverwall use <name>
+        """)
+
+    var config = try Store(dataDir: data).load()
+    config.profiles["mac"]!.grid.rows = nil
+    try Store(dataDir: data).save(config)
+    #expect(SaverContent.summary(from: data).contains("Grid: 7 columns, rows fit the screen · every 4 s · flip"))
+}
+
+@Test func configureSheetSummaryWithoutAProfileIsTheFallbackMessage() throws {
+    #expect(SaverContent.summary(from: try scratch().data) == "Coverwall: no profile — run \"coverwall add <name> <folder>\"")
 }
