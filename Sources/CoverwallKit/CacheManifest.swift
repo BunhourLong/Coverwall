@@ -5,6 +5,9 @@ public struct CacheManifest: Codable, Equatable, Sendable {
     /// Size the tiles were encoded at; a different profile value re-encodes everything.
     public var tileMaxPixels: Int?
     public var tiles: [String: Tile] = [:]
+    /// CLI-only, source path → tile hash for sources that matched an existing tile (tracks of one album), so a
+    /// re-sync doesn't re-read them. Optional: manifests from before Phase 6 decode unchanged.
+    public var duplicates: [String: Duplicate]?
 
     public struct Tile: Codable, Hashable, Sendable {
         public var source: String
@@ -15,6 +18,11 @@ public struct CacheManifest: Codable, Equatable, Sendable {
             self.source = source
             self.mtime = mtime
         }
+    }
+
+    public struct Duplicate: Codable, Hashable, Sendable {
+        public var mtime: Double
+        public var hash: String
     }
 
     public init() {}

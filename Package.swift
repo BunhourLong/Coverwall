@@ -18,6 +18,6 @@ let package = Package(
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ]),
         // Depends on `coverwall` so the end-to-end tests can run the built binary.
-        .testTarget(name: "CoverwallKitTests", dependencies: ["CoverwallKit", "coverwall"]),
+        .testTarget(name: "CoverwallKitTests", dependencies: ["CoverwallKit", "coverwall"], resources: [.copy("Fixtures")]),
     ]
 )

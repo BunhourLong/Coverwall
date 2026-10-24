@@ -110,3 +110,80 @@ private func modified(_ url: URL) throws -> Date? {
         try TileCache.sync("mac", profile: profile(missing), dataDir: dirs.data)
     }
 }
+
+/// Copies the encoder-made audio fixtures (ffmpeg: ID3v2.3/2.4 mp3, m4a `covr`, FLAC PICTURE) into `folder`.
+private func copyFixtures(_ names: [String], to folder: URL) throws {
+    let fixtures = try #require(Bundle.module.url(forResource: "Fixtures", withExtension: nil))
+    for name in names { try FileManager.default.copyItem(at: fixtures.appendingPathComponent(name), to: folder.appendingPathComponent(name)) }
+}
+
+@Test func syncTakesEmbeddedCoverArtFromMp3M4aAndFlac() throws {
+    let dirs = try scratch()
+    try copyFixtures(["red.mp3", "green.m4a", "blue.flac"], to: dirs.source)
+
+    let report = try TileCache.sync("mac", profile: profile(dirs.source), dataDir: dirs.data)
+
+    #expect(report.images == 3 && report.skipped.isEmpty, "\(report)")
+    #expect(try tileFiles(dirs.data).map(pixelSize).allSatisfy { $0 == (64, 64) })
+}
+
+@Test func tracksSharingAnAlbumCoverMakeOneTile() throws {
+    let dirs = try scratch()
+    try copyFixtures(["red.mp3", "red-track2.mp3"], to: dirs.source)
+
+    let report = try TileCache.sync("mac", profile: profile(dirs.source), dataDir: dirs.data)
+
+    #expect(report.images == 1 && report.duplicates == 1)
+}
+
+@Test func tracksWithoutCoverArtAreIgnoredNotReportedAsSkipped() throws {
+    let dirs = try scratch()
+    try copyFixtures(["no-art.mp3"], to: dirs.source)
+
+    let report = try TileCache.sync("mac", profile: profile(dirs.source), dataDir: dirs.data)
+
+    #expect(report == SyncReport())
+}
+
+@Test func truncatedAudioFilesNeverCrashOrMakeHalfDrawnTiles() throws {
+    let dirs = try scratch()
+    let fixtures = try #require(Bundle.module.url(forResource: "Fixtures", withExtension: nil))
+    for name in ["red.mp3", "red-track2.mp3", "green.m4a", "blue.flac"] {
+        let bytes = try Data(contentsOf: fixtures.appendingPathComponent(name))
+        for length in stride(from: 0, to: bytes.count, by: 7) {
+            try bytes.prefix(length).write(to: dirs.source.appendingPathComponent("\(length)-\(name)"))
+        }
+    }
+
+    let report = try TileCache.sync("mac", profile: profile(dirs.source), dataDir: dirs.data)
+
+    // A cut can still hold the whole picture (fine); a cut-short one must give no tile, not a half-drawn one.
+    #expect(report.images <= 3)
+    #expect(try tileFiles(dirs.data).map(pixelSize).allSatisfy { $0 == (64, 64) })
+}
+
+private func makeUnreadable(_ url: URL) throws {
+    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+}
+
+@Test func unreadableAudioFilesAreReportedAsSkipped() throws {
+    let dirs = try scratch()
+    try copyFixtures(["red.mp3"], to: dirs.source)
+    try makeUnreadable(dirs.source.appendingPathComponent("red.mp3"))
+
+    let report = try TileCache.sync("mac", profile: profile(dirs.source), dataDir: dirs.data)
+
+    #expect(report.skipped == [dirs.source.appendingPathComponent("red.mp3").path])
+}
+
+@Test func resyncDoesNotReReadUnchangedDuplicateTracks() throws {
+    let dirs = try scratch()
+    try copyFixtures(["red.mp3", "red-track2.mp3"], to: dirs.source)
+    _ = try TileCache.sync("mac", profile: profile(dirs.source), dataDir: dirs.data)
+    // red.mp3 sorts after red-track2.mp3, so it's the duplicate; a re-read would now be "skipped".
+    try makeUnreadable(dirs.source.appendingPathComponent("red.mp3"))
+
+    let again = try TileCache.sync("mac", profile: profile(dirs.source), dataDir: dirs.data)
+
+    #expect(again == SyncReport(images: 1, added: 0, removed: 0, duplicates: 1, skipped: []))
+}

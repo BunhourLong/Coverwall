@@ -16,7 +16,7 @@ struct Coverwall: ParsableCommand {
 struct Add: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Add a profile: cache the covers in <folder> and remember its settings.")
     @Argument(help: "Profile name (letters, digits, '-', '_').") var name: String
-    @Argument(help: "Folder of cover images (jpg, png, heic, webp, tiff).") var folder: String
+    @Argument(help: "Folder of cover images (jpg, png, heic, webp, tiff) or music (mp3, m4a, flac with embedded art).") var folder: String
     @OptionGroup var options: ProfileOptions
     @Flag(help: "Print the sync report as JSON.") var json = false
 
@@ -250,7 +250,7 @@ func show(_ name: String, _ profile: Profile, _ report: SyncReport, json: Bool) 
         ?? "\(gridText(profile.grid)), rows fit each screen"
     print("\(name): \(report.images) images" + (notes.isEmpty ? "" : " (\(notes.joined(separator: ", ")))") + " → \(visible)")
     for path in report.skipped { warn("  skipped (unreadable or not an image): \(path)") }
-    if report.images == 0 { warn("  no covers found — supported: jpg, jpeg, png, heic, webp, tiff") }
+    if report.images == 0 { warn("  no covers found — supported: jpg, jpeg, png, heic, webp, tiff, and mp3/m4a/flac with embedded art") }
 }
 
 func gridText(_ grid: Grid) -> String { grid.rows.map { "\(grid.columns)x\($0)" } ?? "\(grid.columns) columns" }

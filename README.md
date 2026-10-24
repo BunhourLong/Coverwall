@@ -43,6 +43,8 @@ permissions and copies what the saver needs into the saver's own container:
 ## Features
 
 - **Any local folder** of jpg, jpeg, png, heic, webp or tiff images. Unreadable files are skipped and reported.
+- **Or your music folder.** Cover art embedded in mp3, m4a and flac files is used too, one tile per album
+  (tracks sharing a cover are deduplicated). Tracks without art are ignored.
 - **Any grid** from `1x1` to `16x16`. Whole tiles fill the screen edge to edge; each cover fills its
   tile (center-cropped). Give only `--columns` and the rows fit each screen. `1x1` is a single cover.
 - **Smart shuffling.** With more images than tiles (say 100 images on a 7×5 grid), no cover
