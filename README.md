@@ -7,7 +7,7 @@ Point it at any folder of cover art, pick a grid size, and Coverwall shuffles th
 the screen, flipping or fading tiles one at a time. Inspired by [MusaicFM](https://github.com/obrhoff/MusaicFM),
 but offline and fully under your control from the terminal.
 
-> **Status:** v1 works from source (`make install`). A Homebrew tap is next.
+> **Status:** v0.1 — install with Homebrew or from source.
 
 ## How it works
 
@@ -60,6 +60,19 @@ permissions and copies what the saver needs into the saver's own container:
 - Xcode Command Line Tools (`xcode-select --install`). Full Xcode isn't required.
 
 ## Install
+
+With Homebrew (builds from source, a minute or so):
+
+```sh
+brew install bunhourlong/tap/coverwall
+coverwall install
+```
+
+Homebrew can't write to `~/Library`, so `coverwall install` copies the saver into
+`~/Library/Screen Savers`. Run it again after every `brew upgrade coverwall`, and run
+`coverwall uninstall` before `brew uninstall coverwall`.
+
+From source:
 
 ```sh
 git clone https://github.com/BunhourLong/Coverwall.git
@@ -181,5 +194,5 @@ Tests/CoverwallKitTests/
 ## Roadmap
 
 1. ~~Platform spike~~, ~~`CoverwallKit`~~, ~~CLI + cache pipeline~~, ~~saver renderer + dev host app~~, ~~install flow~~
-2. Homebrew tap: `brew install bunhourlong/tap/coverwall && coverwall install`
+2. ~~Homebrew tap~~ (`brew install bunhourlong/tap/coverwall && coverwall install`)
 3. Later: cover art pulled from audio files, hero tiles

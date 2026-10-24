@@ -49,5 +49,5 @@ private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int
 @Test func installWithoutABuiltSaverSaysHowToGetOne() throws {
     // The test binary has no ../share/coverwall, so this fails before touching ~/Library or the host.
     let install = try coverwall("install", data: try scratch().data)
-    #expect(install.status != 0 && install.err.contains("make install"), "\(install.err)")
+    #expect(install.status != 0 && install.err.contains("make install") && install.err.contains("brew reinstall coverwall"), "\(install.err)")
 }

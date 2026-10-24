@@ -142,7 +142,7 @@ struct Install: ParsableCommand {
 
     func run() throws {
         guard let saver = Bundle.main.executableURL.flatMap(Installer.bundledSaver(executable:)) else {
-            throw ValidationError("no built Coverwall.saver next to this coverwall — run `make install` in the source folder")
+            throw ValidationError("no built Coverwall.saver next to this coverwall — run `brew reinstall coverwall`, or `make install` in the source folder")
         }
         try Installer.install(saver)
         try reload()
