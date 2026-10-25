@@ -22,5 +22,10 @@ public enum Paths {
     public static func profile(_ name: String, in dir: URL = dataDir) -> URL { dir.appendingPathComponent("profiles/\(name)", isDirectory: true) }
     public static func manifest(_ name: String, in dir: URL = dataDir) -> URL { profile(name, in: dir).appendingPathComponent("manifest.json") }
     public static func tiles(_ name: String, in dir: URL = dataDir) -> URL { profile(name, in: dir).appendingPathComponent("tiles", isDirectory: true) }
-    public static func tile(_ hash: String, of name: String, in dir: URL = dataDir) -> URL { tiles(name, in: dir).appendingPathComponent("\(hash).jpg") }
+    public static func tile(_ hash: String, of name: String, in dir: URL = dataDir) -> URL { tile(hash, inProfile: profile(name, in: dir)) }
+    public static func tile(_ hash: String, inProfile profile: URL) -> URL { profile.appendingPathComponent("tiles/\(hash).jpg") }
+    /// CLI only: where a sync builds the next cache of `name` before swapping it in (CLAUDE.md 10).
+    public static func staging(_ name: String, in dir: URL = dataDir, id: String = UUID().uuidString) -> URL {
+        dir.appendingPathComponent("profiles/.\(name).tmp-\(id)", isDirectory: true)
+    }
 }

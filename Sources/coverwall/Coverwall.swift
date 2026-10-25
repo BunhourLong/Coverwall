@@ -3,7 +3,7 @@ import ArgumentParser
 import CoverwallKit
 
 @main
-struct Coverwall: ParsableCommand {
+struct Coverwall: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "coverwall",
         abstract: "Control the Coverwall album-cover screen saver.",
@@ -13,17 +13,17 @@ struct Coverwall: ParsableCommand {
 
 // MARK: - Profiles
 
-struct Add: ParsableCommand {
+struct Add: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Add a profile: cache the covers in <folder> and remember its settings.")
     @Argument(help: "Profile name (letters, digits, '-', '_').") var name: String
     @Argument(help: "Folder of cover images (jpg, png, heic, webp, tiff) or music (mp3, m4a, flac with embedded art).") var folder: String
     @OptionGroup var options: ProfileOptions
     @Flag(help: "Print the sync report as JSON.") var json = false
 
-    func run() throws {
+    func run() async throws {
         var profile = Profile(source: URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path)
-        options.apply(to: &profile, fresh: true)
-        try show(name, profile, Store().add(name, profile), json: json)
+        options.apply(to: &profile, fresh: true, displays: await ProfileOptions.displays)
+        try await show(name, profile, Store().add(name, profile), json: json)
     }
 }
 
@@ -37,7 +37,7 @@ struct Use: ParsableCommand {
     }
 }
 
-struct SetCommand: ParsableCommand {
+struct SetCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "set", abstract: "Change a profile's grid, timing or transition.")
     @Argument(help: "Profile (default: the active one).") var name: String?
     @OptionGroup var options: ProfileOptions
@@ -48,24 +48,25 @@ struct SetCommand: ParsableCommand {
         }
     }
 
-    func run() throws {
+    func run() async throws {
         let store = Store()
-        let report = try store.update(name) { options.apply(to: &$0, fresh: false) }
+        let displays = await ProfileOptions.displays
+        let report = try await store.update(name) { options.apply(to: &$0, fresh: false, displays: displays) }
         let (name, profile) = try store.resolve(name, in: store.load())
         print("\(name): \(gridText(profile)), every \(profile.intervalSeconds.formatted())s, \(profile.transition), tiles ≤ \(profile.tileMaxPixels) px")
         if let report { try show(name, profile, report, json: false) }
     }
 }
 
-struct Sync: ParsableCommand {
+struct Sync: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Re-scan a profile's folder (new, changed and deleted covers).")
     @Argument(help: "Profile (default: the active one).") var name: String?
     @Flag(help: "Print the sync report as JSON.") var json = false
 
-    func run() throws {
+    func run() async throws {
         let store = Store()
         let (name, profile) = try store.resolve(name, in: store.load())
-        try show(name, profile, store.sync(name), json: json)
+        try await show(name, profile, store.sync(name), json: json)
     }
 }
 
@@ -116,7 +117,11 @@ struct ProfileOptions: ParsableArguments {
     var changesSomething: Bool { grid != nil || columns != nil || interval != nil || transition != nil || tileMax != nil || heroes != nil }
 
     /// New profiles and grid changes get a tile size computed from the displays unless --tile-max is given.
-    func apply(to profile: inout Profile, fresh: Bool) {
+    @MainActor static var displays: [(points: CGSize, scale: CGFloat)] {
+        NSScreen.screens.map { (points: $0.frame.size, scale: $0.backingScaleFactor) }
+    }
+
+    func apply(to profile: inout Profile, fresh: Bool, displays: [(points: CGSize, scale: CGFloat)]) {
         let newGrid = grid ?? columns.map { Grid(columns: $0, rows: nil) }
         if let newGrid { profile.grid = newGrid }
         if let interval { profile.intervalSeconds = interval }
@@ -125,7 +130,6 @@ struct ProfileOptions: ParsableArguments {
         if let tileMax {
             profile.tileMaxPixels = tileMax
         } else if fresh || newGrid != nil || heroes != nil {
-            let displays = MainActor.assumeIsolated { NSScreen.screens.map { (points: $0.frame.size, scale: $0.backingScaleFactor) } }
             profile.tileMaxPixels = GridLayout.defaultTileMax(columns: profile.grid.columns, rows: profile.grid.rows,
                                                                heroes: profile.heroes ?? 0, displays: displays)
         }

@@ -31,12 +31,15 @@ final class CoverwallView: ScreenSaverView {
     private var timer: Timer?
     private var bag: ShuffleBag?
     private var profile: Profile?
+    private var expiresAt: Date?
     private var tileLayers: [CALayer] = []  // the image layers (each inside a perspective container)
     private var pixels: [Int] = []  // decode size per tile (heroes are bigger)
     private var decodedScale: CGFloat = 0
     private var busyUntil: [Int: CFTimeInterval] = [:]
 
     private static let flipDuration = 0.6, fadeDuration = 0.8, stagger = 0.15
+    /// Height of the attribution band below the grid; never drawn over a cover (SPIKE_NOTES Phase 7.0).
+    private var bandHeight: CGFloat { compact ? 12 : 40 }
 
     override init?(frame: NSRect, isPreview: Bool) {
         Self.created += 1
@@ -154,19 +157,22 @@ final class CoverwallView: ScreenSaverView {
         case .fallback(let message):
             log.notice("#\(self.id) fallback: \(message, privacy: .public)")
             showMessage(message)
-        case .ready(_, let profile, let tiles):
+        case .ready(_, let profile, let tiles, let policy, let expiresAt):
             self.profile = profile
+            self.expiresAt = expiresAt
+            let band = policy.attribution == .none ? 0 : bandHeight
             let seed = UInt64.random(in: .min ... .max)
-            let grid = GridLayout(screen: bounds.size, columns: profile.grid.columns, rows: profile.grid.rows, preview: compact,
+            let grid = GridLayout(screen: CGSize(width: bounds.width, height: bounds.height - band), columns: profile.grid.columns, rows: profile.grid.rows, preview: compact,
                                   heroes: profile.heroes ?? 0, seed: seed)
             var bag = ShuffleBag(pool: tiles.map(\.path), slots: grid.slots, seed: seed)
             let first = bag.fill()
             self.bag = bag
             layer?.backgroundColor = Self.color(profile.background)
             tileLayers = (0..<first.count).map { index in
-                let frame = grid.frame(ofTile: index).insetBy(dx: profile.gapPoints / 2, dy: profile.gapPoints / 2)
-                return makeTile(frame, span: grid.slots[index].span)
+                let frame = grid.frame(ofTile: index).insetBy(dx: profile.gapPoints / 2, dy: profile.gapPoints / 2).offsetBy(dx: 0, dy: band)
+                return makeTile(frame, span: grid.slots[index].span, gravity: policy.crop == .none ? .resizeAspect : .resizeAspectFill)
             }
+            if policy.attribution == .spotify { showAttribution(height: band) }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             tileLayers.forEach { layer?.addSublayer($0.superlayer ?? $0) }
@@ -180,7 +186,7 @@ final class CoverwallView: ScreenSaverView {
                 for (index, image) in images.enumerated() { self.tileLayers[index].contents = image }
                 CATransaction.commit()
             }
-            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(grid.slots.count) tiles, \(tiles.count) covers, \(self.pixels.min() ?? 0)–\(self.pixels.max() ?? 0) px @\(self.scale)x window=\(self.window != nil) size=\(NSStringFromSize(self.bounds.size), privacy: .public)")
+            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(grid.slots.count) tiles, \(tiles.count) covers, \(self.pixels.min() ?? 0)–\(self.pixels.max() ?? 0) px @\(self.scale)x \(policy.crop.rawValue, privacy: .public)/\(policy.attribution.rawValue, privacy: .public) window=\(self.window != nil) size=\(NSStringFromSize(self.bounds.size), privacy: .public)")
         }
     }
 
@@ -193,6 +199,7 @@ final class CoverwallView: ScreenSaverView {
         timer = nil
         bag = nil
         profile = nil
+        expiresAt = nil
         busyUntil = [:]
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -203,7 +210,7 @@ final class CoverwallView: ScreenSaverView {
     }
 
     /// A container with per-tile perspective (so every flip looks the same) holding the image layer.
-    private func makeTile(_ frame: CGRect, span: Int) -> CALayer {
+    private func makeTile(_ frame: CGRect, span: Int, gravity: CALayerContentsGravity) -> CALayer {
         let container = CALayer()
         container.frame = frame
         var perspective = CATransform3DIdentity
@@ -211,9 +218,9 @@ final class CoverwallView: ScreenSaverView {
         container.sublayerTransform = perspective
         let image = CALayer()
         image.frame = container.bounds
-        image.contentsGravity = .resizeAspectFill
+        image.contentsGravity = gravity
         image.masksToBounds = true  // square covers in non-square tiles; a plain rect clip, no offscreen pass
-        image.isOpaque = true
+        image.isOpaque = gravity == .resizeAspectFill  // aspect-fit leaves the background showing
         container.addSublayer(image)
         return image
     }
@@ -229,6 +236,8 @@ final class CoverwallView: ScreenSaverView {
     }
 
     private func tick() {
+        // Past the source's cache TTL: rebuild, which loads the fallback instead of stale covers.
+        if let expiresAt, Date() >= expiresAt { teardown(); apply(); return }
         guard let profile, var bag else { return }
         let now = CACurrentMediaTime()
         let swaps = bag.tick(swaps: profile.swapsPerTick, busy: Set(busyUntil.filter { $0.value > now }.keys))
@@ -348,6 +357,18 @@ final class CoverwallView: ScreenSaverView {
         text.frame = CGRect(x: 0, y: bounds.midY - text.fontSize, width: bounds.width, height: text.fontSize * 2)
         text.autoresizingMask = [.layerWidthSizable, .layerMinYMargin, .layerMaxYMargin]
         layer?.backgroundColor = .black
+        layer?.addSublayer(text)
+    }
+
+    // shortcut: text placeholder; Phase 7.4 swaps in Spotify's official logo per the design guidelines.
+    private func showAttribution(height: CGFloat) {
+        let text = CATextLayer()
+        text.string = "Spotify"
+        text.fontSize = height * 0.4
+        text.alignmentMode = .center
+        text.foregroundColor = .white
+        text.contentsScale = scale
+        text.frame = CGRect(x: 0, y: (height - text.fontSize * 1.2) / 2, width: bounds.width, height: text.fontSize * 1.2)
         layer?.addSublayer(text)
     }
 

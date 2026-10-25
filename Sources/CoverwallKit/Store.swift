@@ -26,13 +26,13 @@ public struct Store: Sendable {
     }
 
     /// Caches the tiles, saves the profile; the first profile becomes active.
-    public func add(_ name: String, _ profile: Profile) throws -> SyncReport {
+    public func add(_ name: String, _ profile: Profile) async throws -> SyncReport {
         var config = try load()
         guard config.profiles[name] == nil else { throw StoreError.profileExists(name) }
         config.profiles[name] = profile
         config.activeProfile = config.activeProfile ?? name
         try config.validate()  // before sync: the name becomes a directory
-        let report = try TileCache.sync(name, profile: profile, dataDir: dataDir)
+        let report = try await TileCache.sync(name, profile: profile, dataDir: dataDir)
         try save(config)
         return report
     }
@@ -45,20 +45,20 @@ public struct Store: Sendable {
     }
 
     /// Re-scans the source folder.
-    public func sync(_ name: String?) throws -> SyncReport {
+    public func sync(_ name: String?) async throws -> SyncReport {
         let (name, profile) = try resolve(name, in: load())
-        return try TileCache.sync(name, profile: profile, dataDir: dataDir)
+        return try await TileCache.sync(name, profile: profile, dataDir: dataDir)
     }
 
     /// Applies `change` and saves; re-encodes the cache only if the tile size changed.
-    public func update(_ name: String?, _ change: (inout Profile) -> Void) throws -> SyncReport? {
+    public func update(_ name: String?, _ change: (inout Profile) -> Void) async throws -> SyncReport? {
         var config = try load()
         let (name, before) = try resolve(name, in: config)
         var after = before
         change(&after)
         config.profiles[name] = after
         try save(config)
-        return after.tileMaxPixels == before.tileMaxPixels ? nil : try TileCache.sync(name, profile: after, dataDir: dataDir)
+        return after.tileMaxPixels == before.tileMaxPixels ? nil : try await TileCache.sync(name, profile: after, dataDir: dataDir)
     }
 
     public func use(_ name: String) throws {
@@ -74,6 +74,7 @@ public struct Store: Sendable {
         if config.activeProfile == name { config.activeProfile = nil }
         try save(config)
         try? FileManager.default.removeItem(at: Paths.profile(name, in: dataDir))
+        TileCache.removeStaging(name, in: dataDir)
     }
 }
 
