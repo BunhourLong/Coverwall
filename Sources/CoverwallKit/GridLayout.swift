@@ -38,8 +38,10 @@ public struct GridLayout: Sendable {
     }
 
     /// Decode size in pixels: the tile's long side on screen (aspect fill), capped by `tileMaxPixels`.
-    public func pixelSize(scale: CGFloat, tileMax: Int, span: Int = 1) -> Int {
-        min(Int((max(tileSize.width, tileSize.height) * CGFloat(span) * scale).rounded(.up)), tileMax)
+    /// `square`: the cover is drawn as a square of the tile's short side (uncropped sources, `SourcePolicy.coverFrame`).
+    public func pixelSize(scale: CGFloat, tileMax: Int, span: Int = 1, square: Bool = false) -> Int {
+        let side = square ? min(tileSize.width, tileSize.height) : max(tileSize.width, tileSize.height)
+        return min(Int((side * CGFloat(span) * scale).rounded(.up)), tileMax)
     }
 }
 

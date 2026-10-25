@@ -32,14 +32,13 @@ final class CoverwallView: ScreenSaverView {
     private var bag: ShuffleBag?
     private var profile: Profile?
     private var expiresAt: Date?
+    private var policy = SourcePolicy.localFolder
     private var tileLayers: [CALayer] = []  // the image layers (each inside a perspective container)
     private var pixels: [Int] = []  // decode size per tile (heroes are bigger)
     private var decodedScale: CGFloat = 0
     private var busyUntil: [Int: CFTimeInterval] = [:]
 
     private static let flipDuration = 0.6, fadeDuration = 0.8, stagger = 0.15
-    /// Height of the attribution band below the grid; never drawn over a cover (SPIKE_NOTES Phase 7.0).
-    private var bandHeight: CGFloat { compact ? 12 : 40 }
 
     override init?(frame: NSRect, isPreview: Bool) {
         Self.created += 1
@@ -128,6 +127,8 @@ final class CoverwallView: ScreenSaverView {
     /// Brings the view in line with `activity`: start, stop, or retime.
     private func apply() {
         guard activity.isActive else { return teardown() }
+        // Past the source's cache TTL (at startAnimation or a tick): rebuild, which loads the fallback, never stale covers.
+        if running, let expiresAt, Date() >= expiresAt { teardown() }
         if !running { setUp() }
         guard let profile, bag != nil else { return }  // fallback message: nothing to animate
         let interval = activity.interval(base: profile.intervalSeconds)
@@ -158,9 +159,22 @@ final class CoverwallView: ScreenSaverView {
             log.notice("#\(self.id) fallback: \(message, privacy: .public)")
             showMessage(message)
         case .ready(_, let profile, let tiles, let policy, let expiresAt):
+            // A source that must be attributed shows nothing without its logo.
+            var logo: CALayer?
+            if let name = policy.attribution.logoName(background: profile.background) {
+                logo = logoLayer(name, policy.attribution)
+                guard logo != nil else {
+                    log.error("#\(self.id) logo \(name, privacy: .public) missing from the bundle")
+                    return showMessage("Coverwall: the attribution logo is missing — reinstall Coverwall")
+                }
+                guard policy.attribution.fits(width: bounds.width, height: bounds.height, aspect: logoAspect) else {
+                    return showMessage("Coverwall: too small to show these covers with their attribution")
+                }
+            }
             self.profile = profile
             self.expiresAt = expiresAt
-            let band = policy.attribution == .none ? 0 : bandHeight
+            self.policy = policy
+            let band = policy.attribution.bandHeight
             let seed = UInt64.random(in: .min ... .max)
             let grid = GridLayout(screen: CGSize(width: bounds.width, height: bounds.height - band), columns: profile.grid.columns, rows: profile.grid.rows, preview: compact,
                                   heroes: profile.heroes ?? 0, seed: seed)
@@ -170,15 +184,15 @@ final class CoverwallView: ScreenSaverView {
             layer?.backgroundColor = Self.color(profile.background)
             tileLayers = (0..<first.count).map { index in
                 let frame = grid.frame(ofTile: index).insetBy(dx: profile.gapPoints / 2, dy: profile.gapPoints / 2).offsetBy(dx: 0, dy: band)
-                return makeTile(frame, span: grid.slots[index].span, gravity: policy.crop == .none ? .resizeAspect : .resizeAspectFill)
+                return makeTile(frame, span: grid.slots[index].span, policy: policy)
             }
-            if policy.attribution == .spotify { showAttribution(height: band) }
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             tileLayers.forEach { layer?.addSublayer($0.superlayer ?? $0) }
+            logo.map { layer?.addSublayer($0) }
             CATransaction.commit()
             decodedScale = scale
-            pixels = grid.slots.map { grid.pixelSize(scale: decodedScale, tileMax: profile.tileMaxPixels, span: $0.span) }
+            pixels = grid.slots.map { grid.pixelSize(scale: decodedScale, tileMax: profile.tileMaxPixels, span: $0.span, square: policy.crop == .none) }
             decode(first, pixels: pixels) { [weak self] images in
                 guard let self else { return }
                 CATransaction.begin()
@@ -186,7 +200,7 @@ final class CoverwallView: ScreenSaverView {
                 for (index, image) in images.enumerated() { self.tileLayers[index].contents = image }
                 CATransaction.commit()
             }
-            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(grid.slots.count) tiles, \(tiles.count) covers, \(self.pixels.min() ?? 0)–\(self.pixels.max() ?? 0) px @\(self.scale)x \(policy.crop.rawValue, privacy: .public)/\(policy.attribution.rawValue, privacy: .public) window=\(self.window != nil) size=\(NSStringFromSize(self.bounds.size), privacy: .public)")
+            log.notice("#\(self.id) active: \(grid.columns)x\(grid.rows), \(grid.slots.count) tiles, \(tiles.count) covers, \(self.pixels.min() ?? 0)–\(self.pixels.max() ?? 0) px @\(self.scale)x \(policy.crop.rawValue, privacy: .public)/\(policy.attribution.rawValue, privacy: .public) logo=\(NSStringFromRect(logo?.frame ?? .zero), privacy: .public) window=\(self.window != nil) size=\(NSStringFromSize(self.bounds.size), privacy: .public)")
         }
     }
 
@@ -210,17 +224,18 @@ final class CoverwallView: ScreenSaverView {
     }
 
     /// A container with per-tile perspective (so every flip looks the same) holding the image layer.
-    private func makeTile(_ frame: CGRect, span: Int, gravity: CALayerContentsGravity) -> CALayer {
+    private func makeTile(_ frame: CGRect, span: Int, policy: SourcePolicy) -> CALayer {
         let container = CALayer()
         container.frame = frame
         var perspective = CATransform3DIdentity
         perspective.m34 = -1 / (800 * CGFloat(span))  // camera distance scales with size: heroes flip like the rest
         container.sublayerTransform = perspective
         let image = CALayer()
-        image.frame = container.bounds
-        image.contentsGravity = gravity
-        image.masksToBounds = true  // square covers in non-square tiles; a plain rect clip, no offscreen pass
-        image.isOpaque = gravity == .resizeAspectFill  // aspect-fit leaves the background showing
+        image.frame = policy.coverFrame(in: container.bounds)
+        image.contentsGravity = policy.crop == .none ? .resizeAspect : .resizeAspectFill
+        image.cornerRadius = policy.cornerRadius
+        image.masksToBounds = true  // square covers in non-square tiles, and the rounded corners
+        image.isOpaque = policy.crop == .centerSquare && policy.cornerRadius == 0  // otherwise the background shows
         container.addSublayer(image)
         return image
     }
@@ -236,8 +251,7 @@ final class CoverwallView: ScreenSaverView {
     }
 
     private func tick() {
-        // Past the source's cache TTL: rebuild, which loads the fallback instead of stale covers.
-        if let expiresAt, Date() >= expiresAt { teardown(); apply(); return }
+        if let expiresAt, Date() >= expiresAt { return apply() }  // expired: apply() swaps in the fallback
         guard let profile, var bag else { return }
         let now = CACurrentMediaTime()
         let swaps = bag.tick(swaps: profile.swapsPerTick, busy: Set(busyUntil.filter { $0.value > now }.keys))
@@ -245,7 +259,7 @@ final class CoverwallView: ScreenSaverView {
         guard !swaps.isEmpty else { return }
         decode(swaps.map(\.image), pixels: swaps.map { pixels[$0.tile] }) { [weak self] images in
             guard let self else { return }
-            let transition = self.activity.transition(preferred: profile.transition)
+            let transition = self.activity.transition(preferred: self.policy.transition(preferred: profile.transition))
             let start = CACurrentMediaTime()
             for (i, (swap, image)) in zip(swaps, images).enumerated() {
                 // ponytail: a cover that failed to decode keeps the old image on screen; the bag still counts it as shown.
@@ -360,16 +374,28 @@ final class CoverwallView: ScreenSaverView {
         layer?.addSublayer(text)
     }
 
-    // shortcut: text placeholder; Phase 7.4 swaps in Spotify's official logo per the design guidelines.
-    private func showAttribution(height: CGFloat) {
-        let text = CATextLayer()
-        text.string = "Spotify"
-        text.fontSize = height * 0.4
-        text.alignmentMode = .center
-        text.foregroundColor = .white
-        text.contentsScale = scale
-        text.frame = CGRect(x: 0, y: (height - text.fontSize * 1.2) / 2, width: bounds.width, height: text.fontSize * 1.2)
-        layer?.addSublayer(text)
+    private var logoAspect: CGFloat = 1
+
+    /// The bundled official logo (unmodified file), decoded at its on-screen pixel size, placed per Kit's layout.
+    // shortcut: PNG can't be subsampled, so the whole 3432×940 file decodes on main (13–29 ms, ~13 MB briefly) per setUp;
+    // move it onto decodeQueue with the first fill if starts ever feel slow.
+    private func logoLayer(_ name: String, _ attribution: SourcePolicy.Attribution) -> CALayer? {
+        guard let url = Bundle(for: CoverwallView.self).url(forResource: name, withExtension: "png"),
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              height > 0 else { return nil }
+        logoAspect = CGFloat(width) / CGFloat(height)
+        let frame = attribution.logoFrame(width: bounds.width, aspect: logoAspect, scale: scale)
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceShouldCacheImmediately: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: Int((frame.width * scale).rounded(.up))]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let logo = CALayer()
+        logo.frame = frame
+        logo.contents = image
+        logo.contentsGravity = .resizeAspect
+        return logo
     }
 
     /// `#RRGGBB`, already validated by `Config`; black if not.

@@ -1,3 +1,5 @@
+import CoreGraphics
+
 /// `profiles/<name>/manifest.json`: one entry per cached tile `tiles/<hash>.jpg`.
 /// Keyed by the source's SHA-256 (dedupe); `mtime` lets `sync` skip unchanged files.
 public struct CacheManifest: Codable, Equatable, Sendable {
@@ -52,4 +54,49 @@ public struct SourcePolicy: Codable, Equatable, Sendable {
     }
 
     public static let localFolder = SourcePolicy(crop: .centerSquare, attribution: .none, cacheTTL: nil, mixable: true)
+}
+
+// Spotify's design guidelines (SPIKE_NOTES Phase 7.0): full logo ≥ 70 pt wide, clear space of ½ the icon height on every
+// side, never drawn over a cover, covers with rounded corners (8 pt on large screens). The bundled full logo has no
+// padding and its icon is as tall as the logo, so the clear space is half the logo height.
+extension SourcePolicy.Attribution {
+    static let logoHeight: CGFloat = 24  // × 3432/940 ≈ 88 pt wide
+
+    /// Points reserved below the grid for the logo.
+    public var bandHeight: CGFloat { self == .spotify ? Self.logoHeight * 2 : 0 }
+
+    /// The logo centred in the band (band at y = 0, `aspect` = logo width / height), on whole pixels so it stays sharp.
+    public func logoFrame(width: CGFloat, aspect: CGFloat, scale: CGFloat = 1) -> CGRect {
+        func pixels(_ value: CGFloat) -> CGFloat { (value * scale).rounded() / scale }
+        let size = CGSize(width: pixels(Self.logoHeight * aspect), height: Self.logoHeight)
+        return CGRect(x: pixels((width - size.width) / 2), y: (bandHeight - size.height) / 2, width: size.width, height: size.height)
+    }
+
+    /// Room for the band plus a grid above it, and for the logo with its clear space beside it; otherwise no covers.
+    public func fits(width: CGFloat, height: CGFloat, aspect: CGFloat) -> Bool {
+        bandHeight == 0 || (height > bandHeight && width >= Self.logoHeight * aspect + bandHeight / 2)
+    }
+
+    /// The bundled logo for this background: white on dark, black on light (the green one is only allowed on pure black/white).
+    public func logoName(background: String) -> String? {
+        guard self == .spotify else { return nil }
+        let rgb = UInt32(background.dropFirst(), radix: 16) ?? 0
+        let luma = 0.299 * Double(rgb >> 16 & 0xFF) + 0.587 * Double(rgb >> 8 & 0xFF) + 0.114 * Double(rgb & 0xFF)
+        return luma < 128 ? "Spotify_Full_Logo_RGB_White" : "Spotify_Full_Logo_RGB_Black"
+    }
+}
+
+extension SourcePolicy {
+    public var cornerRadius: CGFloat { attribution == .spotify ? 8 : 0 }
+
+    /// Attributed artwork must not be distorted, and a flip swings bottom covers through the logo's clear space: fade.
+    public func transition(preferred: Transition) -> Transition { attribution == .none ? preferred : .fade }
+
+    /// Where a cover goes in its tile: filling it (`.centerSquare`, already square-cropped), or a centred square so an
+    /// uncropped (square) cover and its rounded corners line up.
+    public func coverFrame(in tile: CGRect) -> CGRect {
+        guard crop == .none else { return tile }
+        let side = min(tile.width, tile.height)
+        return CGRect(x: tile.midX - side / 2, y: tile.midY - side / 2, width: side, height: side)
+    }
 }

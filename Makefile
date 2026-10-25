@@ -7,6 +7,8 @@ PREFIX  ?= $(HOME)/.local
 KIT     := $(addprefix Sources/CoverwallKit/,Config.swift Paths.swift GridLayout.swift ShuffleBag.swift \
              CacheManifest.swift SaverActivity.swift SaverContent.swift)
 SOURCES := $(wildcard Saver/*.swift) $(KIT)
+# Spotify's official logos, unmodified (attribution for Spotify profiles, PLAN.md 7.4).
+RESOURCES := $(wildcard Saver/Resources/*)
 
 .PHONY: build kit test install uninstall reload host clean
 
@@ -20,10 +22,11 @@ test:
 	# Release too: Homebrew ships it, and a release-only TaskGroup miscompile once hung `add` (Phase 7.3).
 	swift test -c release
 
-$(SAVER): $(SOURCES) Saver/Info.plist
+$(SAVER): $(SOURCES) $(RESOURCES) Saver/Info.plist
 	rm -rf $@
-	mkdir -p $@/Contents/MacOS
+	mkdir -p $@/Contents/MacOS $@/Contents/Resources
 	cp Saver/Info.plist $@/Contents/Info.plist
+	cp $(RESOURCES) $@/Contents/Resources/
 	for arch in arm64 x86_64; do \
 	  xcrun swiftc -swift-version 5 -O -parse-as-library -module-name Coverwall -target $$arch-apple-macos14.6 \
 	    -emit-executable -Xlinker -bundle -o build/Coverwall-$$arch $(SOURCES) || exit 1; \
@@ -31,7 +34,9 @@ $(SAVER): $(SOURCES) Saver/Info.plist
 	lipo -create build/Coverwall-arm64 build/Coverwall-x86_64 -output $@/Contents/MacOS/Coverwall
 	codesign --force --sign - $@
 
-$(HOST): $(SOURCES) HostApp/HostApp.swift
+$(HOST): $(SOURCES) $(RESOURCES) HostApp/HostApp.swift
+	mkdir -p build
+	cp $(RESOURCES) build/  # a bare executable's Bundle.main resources are its own folder
 	xcrun swiftc -swift-version 5 -parse-as-library -module-name CoverwallHost -target $$(uname -m)-apple-macos14.6 \
 	  -o $@ $(SOURCES) HostApp/HostApp.swift
 

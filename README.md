@@ -207,3 +207,7 @@ Tests/CoverwallKitTests/
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+The Spotify logos in `Saver/Resources/` are Spotify's trademarks, bundled unmodified from
+[Spotify's design guidelines](https://developer.spotify.com/documentation/design) to attribute covers from Spotify.
+They are not covered by the MIT license.
