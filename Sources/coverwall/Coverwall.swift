@@ -10,6 +10,13 @@ struct Coverwall: AsyncParsableCommand {
         abstract: "Control the Coverwall album-cover screen saver.",
         subcommands: [Add.self, Use.self, SetCommand.self, Sync.self, List.self, Remove.self,
                       Install.self, Uninstall.self, Doctor.self, Reload.self, Preview.self, Settings.self, Spotify.self])
+
+    /// Every run first drops caches past their expiry, so they aren't kept indefinitely even if nobody syncs them
+    /// (Spotify's terms). Never in the way of the command itself.
+    static func main() async {
+        _ = try? Store().purgeExpiredCaches()
+        await main(nil)
+    }
 }
 
 // MARK: - Profiles
@@ -32,6 +39,8 @@ struct Add: AsyncParsableCommand {
     func run() async throws {
         var source = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
         if folder.hasPrefix("spotify:") {
+            try SpotifySources.checkKind(folder)  // a typo shouldn't send anyone through a browser login first
+            try await Spotify.loginIfNeeded()
             let resolved = try await SpotifySources.resolve(folder, detail, api: SpotifyAccount().api(trace: trace(verbose)))
             if let match = resolved.match { json ? warn("artist: \(match)") : print("artist: \(match)") }  // --json: stdout stays pure JSON
             source = resolved.source
@@ -56,6 +65,7 @@ struct SetCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "set", abstract: "Change a profile's grid, timing or transition.")
     @Argument(help: "Profile (default: the active one).") var name: String?
     @OptionGroup var options: ProfileOptions
+    @Flag(help: "Print Spotify's raw error replies.") var verbose = false
 
     func validate() throws {
         guard options.changesSomething else {
@@ -64,7 +74,7 @@ struct SetCommand: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let store = store()
+        let store = store(verbose: verbose)
         let displays = await ProfileOptions.displays
         let report = try await store.update(name) { options.apply(to: &$0, fresh: false, displays: displays) }
         let (name, profile) = try store.resolve(name, in: store.load())
@@ -177,6 +187,7 @@ struct Uninstall: ParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Remove Coverwall.saver from ~/Library/Screen Savers (profiles and cache stay).")
 
     func run() throws {
+        Spotify.unschedule()  // else the daily job keeps firing at a binary that's about to go
         guard try Installer.uninstall() else { return print("Coverwall.saver wasn't installed — nothing to remove") }
         try reload()
         print("uninstalled — your profiles and cache stay in \(Paths.dataDir.path); delete that folder to remove them too")
@@ -213,8 +224,24 @@ struct Doctor: ParsableCommand {
                 var isFolder: ObjCBool = false
                 let source = !profile.source.hasPrefix("/") || fm.fileExists(atPath: profile.source, isDirectory: &isFolder) && isFolder.boolValue
                 let tiles = tileCount(name)
+                let manifest = try? JSONDecoder().decode(CacheManifest.self, from: Data(contentsOf: Paths.manifest(name)))
+                let when = { (seconds: Double) in Date(timeIntervalSince1970: seconds).formatted(date: .abbreviated, time: .shortened) }
                 check("profile \(name)", source && tiles > 0,
-                      "\(tiles) tiles" + (source ? "" : ", folder missing: \(profile.source)") + (tiles > 0 ? "" : " — run `coverwall sync \(name)`"))
+                      "\(tiles) tiles" + (source ? "" : ", folder missing: \(profile.source)") + (tiles > 0 ? "" : " — run `coverwall sync \(name)`")
+                        + (manifest?.syncedAt.map { ", last sync \(when($0))" } ?? "") + (manifest?.expiresAt.map { ", covers expire \(when($0))" } ?? ""))
+            }
+            // Offline: what's stored and scheduled; `coverwall spotify status` checks the login live.
+            let account = SpotifyAccount(), clientID = (try? account.clientID()) ?? nil
+            let spotifyProfiles = config.profiles.values.contains { SpotifySource.Kind(source: $0.source) != nil }
+            if clientID == nil, !spotifyProfiles {
+                check("spotify", true, "not set up (optional)")
+            } else {
+                check("spotify client ID", clientID != nil, clientID != nil ? "set" : "not set — run `coverwall spotify setup`")
+                let loggedIn = (try? account.isLoggedIn()) ?? false
+                // Logged out with no Spotify profile is a choice, not a fault.
+                check("spotify login", loggedIn || !spotifyProfiles, loggedIn ? "yes — `coverwall spotify status` checks it live" : "no — run `coverwall spotify login`")
+                let scheduled = (try? shell("/bin/launchctl", "print", "gui/\(getuid())/\(LaunchAgent.label)"))?.status == 0
+                check("spotify daily sync", true, scheduled ? "on — log: \(Paths.syncLog.path)" : "off — `coverwall spotify schedule on` keeps covers from expiring")
             }
         } catch {
             check("config", false, "\(error)")

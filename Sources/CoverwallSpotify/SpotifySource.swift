@@ -120,10 +120,16 @@ public enum SpotifySources {
     }
 
     /// Folders as before; `spotify:` profiles get a `SpotifySource` logged in as the stored account (created only then).
-    public static func factory(trace: SpotifyAPI.Trace? = nil) -> Store.SourceFactory {
+    public static func factory(trace: SpotifyAPI.Trace? = nil, http: any HTTPClient = URLSession.spotify) -> Store.SourceFactory {
         { profile in
             guard let kind = SpotifySource.Kind(source: profile.source) else { return LocalFolderSource(folder: profile.source) }
-            return SpotifySource(kind, api: try SpotifyAccount().api(trace: trace))
+            return SpotifySource(kind, api: try SpotifyAccount(http: http).api(trace: trace))
         }
+    }
+
+    /// `add`'s first argument names a source kind we know (checked before any login or network call).
+    public static func checkKind(_ kind: String) throws {
+        let needsArgument = ["spotify:artist", "spotify:playlist"].contains(kind)
+        guard needsArgument || SpotifySource.Kind(source: kind) != nil else { throw SpotifyError.unknownSource(kind) }
     }
 }

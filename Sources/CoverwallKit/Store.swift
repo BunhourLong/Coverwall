@@ -69,9 +69,19 @@ public struct Store: Sendable {
 
     /// Deletes the caches whose source limits how long covers may be kept (e.g. after a logout). Profiles stay.
     public func purgeExpiringCaches() throws -> [String] {
+        try purgeCaches { $0.sourcePolicy.cacheTTL != nil }
+    }
+
+    /// Deletes caches past their `expiresAt` even if nobody syncs them (the saver already ignores them).
+    public func purgeExpiredCaches() throws -> [String] {
+        let now = now().timeIntervalSince1970
+        return try purgeCaches { ($0.expiresAt ?? .infinity) <= now }
+    }
+
+    private func purgeCaches(where condemned: (CacheManifest) -> Bool) throws -> [String] {
         try load().profiles.keys.sorted().filter { name in
             let manifest = try? JSONDecoder().decode(CacheManifest.self, from: Data(contentsOf: Paths.manifest(name, in: dataDir)))
-            guard manifest?.sourcePolicy.cacheTTL != nil else { return false }
+            guard let manifest, condemned(manifest) else { return false }
             dropCache(name)
             return true
         }

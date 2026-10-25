@@ -41,8 +41,9 @@ public enum TileCache {
     public static func sync(_ name: String, from source: some CoverSource, tileMaxPixels: Int, dataDir: URL = Paths.dataDir,
                             now: Date = Date()) async throws -> SyncReport {
         let fm = FileManager.default, live = Paths.profile(name, in: dataDir), staging = Paths.staging(name, in: dataDir)
-        // shortcut: also deletes the staging dir of a sync of this profile still running elsewhere (that one then fails);
-        // add a lock once syncs run unattended (Phase 7.5).
+        // One sync per profile at a time (the scheduled one vs. a manual one); any staging dir left now is garbage.
+        let lock = try await lock(name, in: dataDir)
+        defer { close(lock) }
         removeStaging(name, in: dataDir)
         try fm.createDirectory(at: staging.appendingPathComponent("tiles"), withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: staging) }  // after a swap this is the old cache
@@ -153,6 +154,20 @@ public enum TileCache {
                 }
             }
         }
+    }
+
+    /// Waits for (polls, so no thread blocks) an exclusive `flock` on the profile's lock file; closing the fd releases it.
+    private static func lock(_ name: String, in dataDir: URL) async throws -> Int32 {
+        let url = Paths.syncLock(name, in: dataDir)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fd = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        while flock(fd, LOCK_EX | LOCK_NB) != 0 {
+            let error = errno
+            guard error == EWOULDBLOCK else { close(fd); throw POSIXError(.init(rawValue: error) ?? .EIO) }
+            do { try await Task.sleep(for: .milliseconds(50)) } catch { close(fd); throw error }
+        }
+        return fd
     }
 
     /// Staging dirs of `name` left by failed or killed syncs.

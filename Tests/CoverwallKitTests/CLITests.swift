@@ -10,7 +10,8 @@ private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int
     process.executableURL = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("coverwall")
     process.arguments = arguments
     process.environment = ["COVERWALL_DATA_DIR": data.path, "COVERWALL_CLI_DIR": data.appendingPathComponent("../cli").standardized.path]
-    (process.standardOutput, process.standardError) = (out, err)
+    // No terminal on stdin: `add … spotify:` must never start an interactive (browser) login in tests.
+    (process.standardInput, process.standardOutput, process.standardError) = (FileHandle.nullDevice, out, err)
     try process.run()
     process.waitUntilExit()
     let text = { (pipe: Pipe) in String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) }
@@ -124,4 +125,57 @@ private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int
     let doctor = try coverwall("doctor", data: data)
     #expect(doctor.out.contains("profile sp: 0 tiles — run `coverwall sync sp`") && !doctor.out.contains("folder missing"), "\(doctor.out)")
     #expect(SaverContent.summary(from: data).contains("no covers for 'sp'"))  // no cache yet: the fallback, not a broken path
+}
+
+/// A Spotify profile "sp" whose cache (one tile) expires at `expiresAt` (seconds since 1970).
+private func spotifyProfile(expiresAt: Double, in data: URL) throws {
+    var config = Config()
+    config.profiles["sp"] = Profile(source: "spotify:top-artists")
+    try Store(dataDir: data).save(config)
+    var manifest = CacheManifest()
+    manifest.tiles["abc"] = CacheManifest.Tile(source: "https://i.scdn.co/image/abc", mtime: 0)
+    manifest.policy = SourcePolicy(crop: .none, attribution: .spotify, cacheTTL: 3600, mixable: false)
+    manifest.expiresAt = expiresAt
+    try FileManager.default.createDirectory(at: Paths.tiles("sp", in: data), withIntermediateDirectories: true)
+    try Data("jpg".utf8).write(to: Paths.tile("abc", of: "sp", in: data))
+    try JSONEncoder().encode(manifest).write(to: Paths.manifest("sp", in: data))
+}
+
+@Test func anyRunPurgesExpiredCachesEvenWithoutASync() throws {
+    let data = try scratch().data
+    try spotifyProfile(expiresAt: Date().timeIntervalSince1970 + 3600, in: data)
+    _ = try coverwall("list", data: data)
+    #expect(FileManager.default.fileExists(atPath: Paths.manifest("sp", in: data).path))  // still valid
+
+    try spotifyProfile(expiresAt: Date().timeIntervalSince1970 - 1, in: data)
+    _ = try coverwall("list", data: data)
+    #expect(!FileManager.default.fileExists(atPath: Paths.profile("sp", in: data).path))
+}
+
+@Test func scheduledSpotifySyncWithNothingToDoSaysSo() throws {
+    let data = try scratch().data
+    let sync = try coverwall("spotify", "sync", data: data)
+    #expect(sync.status == 0 && sync.out.contains("no Spotify profiles"), "\(sync.err)")
+}
+
+@Test func doctorHasASpotifySection() throws {
+    let folderOnly = try scratch()
+    try writeImage(folderOnly.source.appendingPathComponent("a.png"), width: 300, height: 300, shade: 0.5)
+    #expect(try coverwall("add", "mac", folderOnly.source.path, data: folderOnly.data).status == 0)
+    #expect(try coverwall("doctor", data: folderOnly.data).out.contains("✓ spotify: not set up (optional)"))
+
+    let data = try scratch().data
+    try spotifyProfile(expiresAt: Date().timeIntervalSince1970 + 3600, in: data)
+    let doctor = try coverwall("doctor", data: data)
+    #expect(doctor.status != 0)
+    #expect(doctor.out.contains("✗ spotify client ID: not set — run `coverwall spotify setup`"), "\(doctor.out)")
+    #expect(doctor.out.contains("✗ spotify login: no — run `coverwall spotify login`"))
+    #expect(doctor.out.contains("profile sp: 1 tiles") && doctor.out.contains("covers expire"))
+}
+
+@Test func doctorDoesntFailAnOptionalLogoutWithoutSpotifyProfiles() throws {
+    let data = try scratch().data
+    #expect(try coverwall("spotify", "setup", "--client-id", "0123456789abcdef0123456789abcdef", data: data).status == 0)
+    let doctor = try coverwall("doctor", data: data)
+    #expect(doctor.out.contains("✓ spotify login: no"), "\(doctor.out)")
 }

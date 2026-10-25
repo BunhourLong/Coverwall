@@ -20,6 +20,17 @@ public enum Paths {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/coverwall", isDirectory: true)
     }
 
+    /// CLI only: held while a sync of `name` runs (outside the profile dir, which the sync swaps).
+    public static func syncLock(_ name: String, in dir: URL = dataDir) -> URL { dir.appendingPathComponent("profiles/.\(name).lock") }
+
+    /// CLI only: the scheduled sync's output.
+    public static var syncLog: URL { cliDir.appendingPathComponent("sync.log") }
+
+    /// CLI only: where `coverwall spotify schedule on` puts its LaunchAgent.
+    public static var launchAgent: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/LaunchAgents/com.bunhourlong.Coverwall.sync.plist")
+    }
+
     /// CLI only (in the sandbox the home dir is the container).
     public static var installedSaver: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Screen Savers/Coverwall.saver")

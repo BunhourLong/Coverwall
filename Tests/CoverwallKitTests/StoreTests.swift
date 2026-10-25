@@ -155,3 +155,21 @@ private let expiring = SourcePolicy(crop: .none, attribution: .spotify, cacheTTL
     await #expect(throws: StoreError.noActiveProfile) { try await store.sync("remote") }
     #expect(!FileManager.default.fileExists(atPath: Paths.manifest("remote", in: store.dataDir).path))  // expired: the terms win
 }
+
+@Test func expiredCachesArePurgedWithoutASyncValidOnesAndFoldersStay() async throws {
+    let (_, folder) = try store()
+    final class Clock: @unchecked Sendable { var now = Date() }
+    let clock = Clock()
+    let store = Store(dataDir: try scratch().data, now: { clock.now }, source: { profile in
+        profile.source.hasPrefix("spotify:") ? OneCover(policy: expiring) as any CoverSource : LocalFolderSource(folder: profile.source)
+    })
+    _ = try await store.add("remote", Profile(source: "spotify:saved-albums"))
+    _ = try await store.add("local", profile(folder))
+
+    clock.now = clock.now.addingTimeInterval(30)
+    #expect(try store.purgeExpiredCaches() == [])
+    clock.now = clock.now.addingTimeInterval(31)
+    #expect(try store.purgeExpiredCaches() == ["remote"])
+    #expect(!FileManager.default.fileExists(atPath: Paths.profile("remote", in: store.dataDir).path))
+    #expect(FileManager.default.fileExists(atPath: Paths.manifest("local", in: store.dataDir).path))
+}

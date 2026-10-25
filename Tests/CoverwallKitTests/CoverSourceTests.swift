@@ -32,8 +32,9 @@ private func manifest(_ data: URL) throws -> CacheManifest {
     try JSONDecoder().decode(CacheManifest.self, from: Data(contentsOf: Paths.manifest("mac", in: data)))
 }
 
+/// Staging dirs left in `profiles/` (the sync lock files are expected to stay).
 private func hiddenProfileDirs(_ data: URL) throws -> [String] {
-    try FileManager.default.contentsOfDirectory(atPath: data.appendingPathComponent("profiles").path).filter { $0.hasPrefix(".") }
+    try FileManager.default.contentsOfDirectory(atPath: data.appendingPathComponent("profiles").path).filter { $0.contains(".tmp-") }
 }
 
 @Test func manifestsWithoutAPolicyAreLocalFolderCaches() throws {
@@ -263,4 +264,16 @@ private func covers(_ count: Int) throws -> [String: Data] {
         try await TileCache.sync("mac", from: gone, tileMaxPixels: 128, dataDir: dirs.data, now: now)
     }
     #expect(try manifest(dirs.data) == before)
+}
+
+@Test func overlappingSyncsOfOneProfileTakeTurns() async throws {
+    let dirs = try scratch()
+    // Different tile sizes, so neither can reuse the other's tiles: both really build.
+    async let first = TileCache.sync("mac", from: Downloads(try covers(20), concurrency: 1), tileMaxPixels: 64, dataDir: dirs.data, now: now)
+    try await Task.sleep(for: .milliseconds(30))
+    async let second = TileCache.sync("mac", from: Downloads(try covers(20), concurrency: 1), tileMaxPixels: 32, dataDir: dirs.data, now: now)
+
+    #expect(try await first.images == 20)
+    #expect(try await second.images == 20)
+    #expect(try [32, 64].contains(manifest(dirs.data).tileMaxPixels) && hiddenProfileDirs(dirs.data).isEmpty)  // either order
 }

@@ -9,6 +9,14 @@ extension URLSession: HTTPClient {
     /// Ephemeral: no cookies, no on-disk cache of anything token-bearing.
     public static let spotify = URLSession(configuration: .ephemeral)
 
+    /// For the unattended sync: launchd starts it right at wake, often before Wi-Fi is back — wait up to 5 min for it.
+    public static let spotifyPatient: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.waitsForConnectivity = true
+        configuration.timeoutIntervalForResource = 300
+        return URLSession(configuration: configuration)
+    }()
+
     public func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let data: Data, response: URLResponse
         do { (data, response) = try await self.data(for: request) } catch is URLError { throw SpotifyError.offline }
@@ -116,7 +124,15 @@ public actor TokenProvider {
 
     private func refresh(_ tokens: Tokens) async throws -> Tokens {
         if let refreshing { return try await refreshing.value }
-        let task = Task { [clientID, http, now] in try await TokenEndpoint.refresh(tokens, clientID: clientID, http: http, now: now()) }
+        let task = Task { [clientID, http, now, store] in
+            do {
+                return try await TokenEndpoint.refresh(tokens, clientID: clientID, http: http, now: now())
+            } catch SpotifyError.loginExpired {
+                // Another process (the scheduled sync) may have rotated the refresh token meanwhile: retry once with the stored one.
+                guard let stored = try? Tokens.load(from: store), stored.refreshToken != tokens.refreshToken else { throw SpotifyError.loginExpired }
+                return try await TokenEndpoint.refresh(stored, clientID: clientID, http: http, now: now())
+            }
+        }
         refreshing = task
         defer { refreshing = nil }
         let fresh = try await task.value

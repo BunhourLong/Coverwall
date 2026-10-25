@@ -123,6 +123,8 @@ becomes the active one.
 | `coverwall doctor` | Check install, data dir, config, caches and stray processes |
 | `coverwall add <name> spotify:saved-albums \| spotify:top-artists \| spotify:artist "<name>" \| spotify:playlist <link>` | A profile from your Spotify library (after `coverwall spotify setup` + `login`); `sync` refreshes it |
 | `coverwall spotify setup` / `login` / `logout [--all]` / `status [--json]` | Connect your own Spotify app (the app owner needs Premium). See [PRIVACY.md](PRIVACY.md) |
+| `coverwall spotify schedule on\|off` | Refresh Spotify profiles daily (05:00, after wake, and at login) so their covers never expire; log in `~/Library/Application Support/coverwall/sync.log` |
+| `coverwall spotify sync` | Refresh every Spotify profile now (what the schedule runs) |
 
 `add`, `sync`, `list` and `doctor` take `--json` for scripting. Every command exits non-zero on
 error, and the error says what to do next. `coverwall help <command>` shows all options.

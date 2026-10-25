@@ -17,6 +17,9 @@ public struct SpotifyAccount: Sendable {
 
     public func clientID() throws -> String? { try store.read(Self.clientIDKey) }
 
+    /// Tokens stored (offline; `status` checks them live).
+    public func isLoggedIn() throws -> Bool { try Tokens.load(from: store) != nil }
+
     /// Spotify Client IDs are 32 hex characters. Another app's ID drops the old app's login: its tokens can't refresh.
     public func setClientID(_ raw: String) throws {
         let id = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()

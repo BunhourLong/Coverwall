@@ -150,3 +150,20 @@ private final class OfflineProtocol: URLProtocol {
         try await URLSession(configuration: configuration).send(URLRequest(url: URL(string: "https://api.spotify.com/v1/me")!))
     }
 }
+
+@Test func refreshRejectedBecauseAnotherProcessRotatedTheTokenRetriesWithTheStoredOne() async throws {
+    let store = try storeWith(Tokens(accessToken: "OLD", refreshToken: "R", expiresAt: t0, scope: ""))
+    let http = StubHTTP { request in
+        if form(request)["refresh_token"] == "R" {
+            // Meanwhile the scheduled sync refreshed and Spotify rotated R → R2.
+            try? Tokens(accessToken: "OTHER", refreshToken: "R2", expiresAt: t0, scope: "").save(in: store)
+            return (400, #"{"error":"invalid_grant"}"#)
+        }
+        return (200, #"{"access_token":"NEW","token_type":"Bearer","scope":"","expires_in":3600}"#)
+    }
+    let provider = TokenProvider(clientID: "id", store: store, http: http, now: { t0 })
+
+    #expect(try await provider.accessToken() == "NEW")
+    #expect(http.requests.map { form($0)["refresh_token"] } == ["R", "R2"])
+    #expect(try Tokens.load(from: store)?.refreshToken == "R2")
+}
