@@ -164,3 +164,103 @@ private func activeProfile(from source: StubSource, syncedAt: Date) async throws
         .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
     #expect(image.width == image.height)
 }
+
+/// Counts how many `data(for:)` calls overlap; each one takes a moment, like a download.
+private final class Downloads: CoverSource, @unchecked Sendable {
+    let policy = remote
+    let maxConcurrentReads: Int
+    let covers: [String: Data]
+    var failing: Set<String> = [], unreadable: Set<String> = [], slow: Set<String> = []
+    private let lock = NSLock()
+    private var running = 0
+    private(set) var peak = 0, reads: [String] = []
+
+    init(_ covers: [String: Data], concurrency: Int) { (self.covers, maxConcurrentReads) = (covers, concurrency) }
+
+    func items() async throws -> [CoverItem] { covers.keys.sorted().map { CoverItem(source: $0, mtime: 0) } }
+
+    func data(for item: CoverItem) async throws -> Data? {
+        lock.withLock { running += 1; peak = max(peak, running); reads.append(item.source) }
+        defer { lock.withLock { running -= 1 } }
+        try await Task.sleep(for: .milliseconds(slow.contains(item.source) ? 60 : 10))
+        if failing.contains(item.source) { throw StubError() }
+        if unreadable.contains(item.source) { throw UnreadableCover() }
+        return covers[item.source]
+    }
+}
+
+private func covers(_ count: Int) throws -> [String: Data] {
+    let image = try png(width: 64, height: 64, shade: 0.5)
+    // Distinct bytes per cover (so no dedupe): append a trailing byte, which ImageIO ignores.
+    return Dictionary(uniqueKeysWithValues: (0..<count).map { (String(format: "https://i.example/%02d", $0), image + Data([UInt8($0)])) })
+}
+
+@Test func readsRunConcurrentlyUpToTheSourcesLimitAndKeepTheirOrder() async throws {
+    let dirs = try scratch()
+    let source = Downloads(try covers(20), concurrency: 6)
+
+    let report = try await TileCache.sync("mac", from: source, tileMaxPixels: 64, dataDir: dirs.data, now: now)
+
+    #expect(report.images == 20)
+    #expect(source.peak == 6)
+    let sources = try manifest(dirs.data).tiles.values.map(\.source).sorted()
+    #expect(sources == source.covers.keys.sorted())
+}
+
+@Test func resyncOnlyReadsNewCovers() async throws {
+    let dirs = try scratch()
+    var all = try covers(5)
+    _ = try await TileCache.sync("mac", from: Downloads(all.filter { $0.key < "https://i.example/03" }, concurrency: 6),
+                                 tileMaxPixels: 64, dataDir: dirs.data, now: now)
+    let source = Downloads(all, concurrency: 6)
+    all.removeAll()
+
+    let report = try await TileCache.sync("mac", from: source, tileMaxPixels: 64, dataDir: dirs.data, now: now)
+
+    #expect(report.added == 2 && report.images == 5)
+    #expect(source.reads.sorted() == ["https://i.example/03", "https://i.example/04"])
+}
+
+@Test func unreadableCoverIsSkippedButAFailedReadAbortsAndKeepsTheCache() async throws {
+    let dirs = try scratch()
+    let first = Downloads(try covers(3), concurrency: 6)
+    first.unreadable = ["https://i.example/01"]
+    let report = try await TileCache.sync("mac", from: first, tileMaxPixels: 64, dataDir: dirs.data, now: now)
+    #expect(report.images == 2 && report.skipped == ["https://i.example/01"])
+    let before = try manifest(dirs.data)
+
+    let offline = Downloads(try covers(4), concurrency: 6)
+    offline.failing = ["https://i.example/03"]
+    await #expect(throws: StubError.self) { try await TileCache.sync("mac", from: offline, tileMaxPixels: 64, dataDir: dirs.data, now: now) }
+
+    #expect(try manifest(dirs.data) == before)
+    #expect(try hiddenProfileDirs(dirs.data).isEmpty)
+}
+
+@Test func concurrentReadsStillDedupeInItemOrder() async throws {
+    let dirs = try scratch()
+    var all = try covers(6)
+    all["https://i.example/05"] = all["https://i.example/00"]  // same cover twice
+    let source = Downloads(all, concurrency: 6)
+    source.slow = ["https://i.example/00"]  // the first one finishes last
+
+    let report = try await TileCache.sync("mac", from: source, tileMaxPixels: 64, dataDir: dirs.data, now: now)
+
+    #expect(report.images == 5 && report.duplicates == 1)
+    let written = try manifest(dirs.data)
+    #expect(written.tiles.values.contains { $0.source == "https://i.example/00" })
+    #expect(written.duplicates?.keys.sorted() == ["https://i.example/05"])
+}
+
+@Test func syncThatWouldEmptyACacheWithCoversFailsAndKeepsThem() async throws {
+    let dirs = try scratch()
+    _ = try await TileCache.sync("mac", from: Downloads(try covers(2), concurrency: 6), tileMaxPixels: 64, dataDir: dirs.data, now: now)
+    let before = try manifest(dirs.data)
+    let gone = Downloads(try covers(2), concurrency: 6)
+    gone.unreadable = ["https://i.example/00", "https://i.example/01"]  // e.g. a NAS dropped mid-sync
+
+    await #expect(throws: TileCacheError.noCoversLeft) {
+        try await TileCache.sync("mac", from: gone, tileMaxPixels: 128, dataDir: dirs.data, now: now)
+    }
+    #expect(try manifest(dirs.data) == before)
+}

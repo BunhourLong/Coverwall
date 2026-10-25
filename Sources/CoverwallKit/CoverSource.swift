@@ -5,8 +5,20 @@ public protocol CoverSource: Sendable {
     var policy: SourcePolicy { get }
     /// The complete list, or throw — never a partial one.
     func items() async throws -> [CoverItem]
-    /// The cover's encoded image; `nil` = this item has no cover (a track without art). Throwing = skipped.
+    /// The cover's encoded image; `nil` = this item has no cover (a track without art). Throwing `UnreadableCover`
+    /// skips the item; any other error fails the whole sync, so the old cache stays (e.g. offline mid-download).
     func data(for item: CoverItem) async throws -> Data?
+    /// How many `data(for:)` calls may run at once.
+    var maxConcurrentReads: Int { get }
+}
+
+extension CoverSource {
+    public var maxConcurrentReads: Int { 1 }
+}
+
+/// This one cover can't be read or isn't an image: reported as skipped, the sync goes on.
+public struct UnreadableCover: Error {
+    public init() {}
 }
 
 /// A path or URL plus its mtime (0 when the source is content-addressed): the same pair the manifest keeps per tile,
@@ -43,9 +55,11 @@ public struct LocalFolderSource: CoverSource {
     }
 
     public func data(for item: CoverItem) async throws -> Data? {
-        let ext = (item.source as NSString).pathExtension.lowercased()
-        guard AudioArtwork.extensions.contains(ext) else { return try Data(contentsOf: URL(fileURLWithPath: item.source)) }
+        let ext = (item.source as NSString).pathExtension.lowercased(), isAudio = AudioArtwork.extensions.contains(ext)
         // Audio is mapped: only the tag's pages are read, not the whole track. Tracks of one album share these bytes.
-        return AudioArtwork.picture(in: try Data(contentsOf: URL(fileURLWithPath: item.source), options: .alwaysMapped), ext: ext)
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: item.source), options: isAudio ? .alwaysMapped : []) else {
+            throw UnreadableCover()
+        }
+        return isAudio ? AudioArtwork.picture(in: data, ext: ext) : data
     }
 }

@@ -94,3 +94,34 @@ private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int
     let login = try coverwall("spotify", "login", data: try scratch().data)
     #expect(login.status == 1 && login.err.contains("coverwall spotify setup"))
 }
+
+@Test func addingASpotifySourceNeedsSetupAndLoginAndAKnownKind() throws {
+    let data = try scratch().data
+    let noSetup = try coverwall("add", "sp", "spotify:saved-albums", data: data)
+    #expect(noSetup.status == 1 && noSetup.err.contains("coverwall spotify setup"), "\(noSetup.err)")
+
+    #expect(try coverwall("spotify", "setup", "--client-id", "0123456789abcdef0123456789abcdef", data: data).status == 0)
+    let noLogin = try coverwall("add", "sp", "spotify:saved-albums", data: data)
+    #expect(noLogin.status == 1 && noLogin.err.contains("coverwall spotify login"), "\(noLogin.err)")
+
+    let unknown = try coverwall("add", "sp", "spotify:liked", data: data)
+    #expect(unknown.status == 1 && unknown.err.contains("unknown source"))
+    let missing = try coverwall("add", "sp", "spotify:artist", data: data)
+    #expect(missing.status == 1 && missing.err.contains("which artist"))
+    let folderWithExtra = try coverwall("add", "sp", data.path, "extra", data: data)
+    #expect(folderWithExtra.status != 0 && folderWithExtra.err.contains("only for spotify:"))
+
+    #expect(!FileManager.default.fileExists(atPath: Paths.config(in: data).path))  // nothing half-added
+}
+
+@Test func doctorAndSheetDescribeASpotifyProfileAsASourceNotAMissingFolder() throws {
+    let data = try scratch().data
+    var config = Config()
+    config.profiles["sp"] = Profile(source: "spotify:top-artists")
+    config.activeProfile = "sp"
+    try Store(dataDir: data).save(config)
+
+    let doctor = try coverwall("doctor", data: data)
+    #expect(doctor.out.contains("profile sp: 0 tiles — run `coverwall sync sp`") && !doctor.out.contains("folder missing"), "\(doctor.out)")
+    #expect(SaverContent.summary(from: data).contains("no covers for 'sp'"))  // no cache yet: the fallback, not a broken path
+}

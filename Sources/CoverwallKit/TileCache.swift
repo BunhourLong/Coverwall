@@ -19,10 +19,12 @@ public struct SyncReport: Codable, Equatable, Sendable {
 
 public enum TileCacheError: Error, Equatable, CustomStringConvertible {
     case sourceMissing(String)
+    case noCoversLeft
 
     public var description: String {
         switch self {
         case .sourceMissing(let path): "folder '\(path)' not found — check the path (or reconnect the drive) and try again"
+        case .noCoversLeft: "no cover could be read this time, so the existing covers are kept — check the source and sync again (`coverwall remove` clears a profile)"
         }
     }
 }
@@ -79,22 +81,24 @@ public enum TileCache {
         var manifest = CacheManifest()
         manifest.tileMaxPixels = tileMaxPixels
         var report = SyncReport(), duplicates: [String: CacheManifest.Duplicate] = [:]
-        for item in try await source.items() {
+        // Known unchanged items are never read.
+        let unchanged = { (item: CoverItem) in known[item].map { fm.fileExists(atPath: Paths.tile($0, inProfile: live).path) } ?? false }
+        try await inOrder(try await source.items(), reading: source, unless: unchanged) { item, read in
             func duplicate(_ hash: String) { report.duplicates += 1; duplicates[item.source] = .init(mtime: item.mtime, hash: hash) }
-            if let hash = known[item], manifest.tiles[hash] != nil { duplicate(hash); continue }
-            // Known unchanged item: no read.
-            if let hash = known[item], reuse(hash) { manifest.tiles[hash] = item; continue }
-            let data: Data?
-            do { data = try await source.data(for: item) } catch { report.skipped.append(item.source); continue }
-            guard let data else { continue }  // a track without a cover isn't an error
+            if let hash = known[item], manifest.tiles[hash] != nil { duplicate(hash); return }
+            if let hash = known[item], reuse(hash) { manifest.tiles[hash] = item; return }
+            if read?.skipped == true { report.skipped.append(item.source); return }
+            guard let data = read?.data else { return }  // unchanged: handled above; nil: a track without a cover isn't an error
             let hash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-            if manifest.tiles[hash] != nil { duplicate(hash); continue }
+            if manifest.tiles[hash] != nil { duplicate(hash); return }
             if !reuse(hash) {
-                guard let jpeg = tile(from: data, side: tileMaxPixels, crop: source.policy.crop) else { report.skipped.append(item.source); continue }
+                guard let jpeg = tile(from: data, side: tileMaxPixels, crop: source.policy.crop) else { report.skipped.append(item.source); return }
                 try jpeg.write(to: Paths.tile(hash, inProfile: staging))
             }
             manifest.tiles[hash] = item
         }
+        // Nothing readable where there were covers: a dropped drive or a broken source, not a wish to empty the profile.
+        if manifest.tiles.isEmpty, !old.tiles.isEmpty { throw TileCacheError.noCoversLeft }
         manifest.duplicates = duplicates.isEmpty ? nil : duplicates
         manifest.policy = source.policy
         manifest.syncedAt = now.timeIntervalSince1970
@@ -103,6 +107,52 @@ public enum TileCache {
         report.added = manifest.tiles.keys.filter { old.tiles[$0] == nil }.count
         report.removed = old.tiles.keys.filter { manifest.tiles[$0] == nil }.count
         return (report, manifest, reused)
+    }
+
+    /// One item's read: its bytes (`nil`: no cover), or skipped (`UnreadableCover`).
+    struct Read: Sendable {
+        var index: Int
+        var data: Data?
+        var skipped = false
+    }
+
+    /// Hands every item to `body` in order with its read (`nil` if `unless` said it needs none). Up to
+    /// `source.maxConcurrentReads` reads run ahead at once; results wait for their turn, so dedupe stays deterministic.
+    /// Any read error other than `UnreadableCover` ends the sync.
+    // A plain struct as the child result: with a tuple holding an enum with `any Error`, release builds
+    // (Swift 6.4) returned the same group result twice and lost the next one.
+    private static func inOrder(_ items: [CoverItem], reading source: some CoverSource, unless unchanged: (CoverItem) -> Bool,
+                                _ body: (CoverItem, Read?) throws -> Void) async throws {
+        let limit = max(1, source.maxConcurrentReads)
+        try await withThrowingTaskGroup(of: Read.self) { group in
+            var done = 0, started = 0, ready: [Int: Read] = [:], unchangedItems = Set<Int>()
+            while done < items.count {
+                while started < items.count, started < done + limit {
+                    let index = started, item = items[index]
+                    started += 1
+                    if unchanged(item) {
+                        unchangedItems.insert(index)
+                    } else {
+                        group.addTask {
+                            do { return Read(index: index, data: try await source.data(for: item)) } catch is UnreadableCover {
+                                return Read(index: index, data: nil, skipped: true)
+                            }
+                        }
+                    }
+                }
+                if unchangedItems.remove(done) != nil {
+                    try body(items[done], nil)
+                    done += 1
+                } else if let read = ready.removeValue(forKey: done) {
+                    try body(items[done], read)
+                    done += 1
+                } else {
+                    // Item `done` is still being read, so the group can't be empty here.
+                    guard let read = try await group.next() else { throw CancellationError() }
+                    ready[read.index] = read
+                }
+            }
+        }
     }
 
     /// Staging dirs of `name` left by failed or killed syncs.

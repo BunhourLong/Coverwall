@@ -98,3 +98,16 @@ func rejectsUnsafeProfileNames(name: String) {
 func rejectsMalformedGridArgument(text: String) {
     #expect(Grid(parsing: text) == nil)
 }
+
+@Test(arguments: ["spotify:saved-albums", "spotify:top-artists", "spotify:artist:4LLpKhyESsyAXpc4laK94U",
+                  "spotify:playlist:37i9dQZF1DXcBWIGoYBM5M"])
+func acceptsSpotifySources(source: String) throws {
+    let json = sampleJSON.replacingOccurrences(of: "/Users/capon/Documents/MacMiller", with: source)
+    #expect(try Config.decode(Data(json.utf8)).active?.source == source)
+}
+
+@Test(arguments: ["spotify:", "spotify:liked", "spotify:artist:", "spotify:artist:Mac Miller", "spotify:playlist:abc",
+                  "spotify:artist:4LLpKhyESsyAXpc4laK94U:x", "Spotify:saved-albums"])
+func rejectsMalformedSpotifySources(source: String) throws {
+    #expect(try invalidField(#""source": "/Users/capon/Documents/MacMiller""#, "\"source\": \"\(source)\"") == "source")
+}

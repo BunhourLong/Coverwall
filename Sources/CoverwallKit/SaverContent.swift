@@ -33,7 +33,7 @@ public enum SaverContent: Equatable, Sendable {
             let heroes = profile.heroes.map { $0 > 0 ? " · \($0) heroes" : "" } ?? ""
             return """
                 Active profile: \(name)
-                Folder: \(profile.source)
+                \(profile.source.hasPrefix("/") ? "Folder" : "Source"): \(profile.source)
                 Grid: \(grid)\(heroes) · every \(profile.intervalSeconds.formatted()) s · \(profile.transition.rawValue)
                 \(tiles.count) covers
                 Change it in Terminal: coverwall set, coverwall use <name>

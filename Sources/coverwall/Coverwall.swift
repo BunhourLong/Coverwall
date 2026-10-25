@@ -1,6 +1,7 @@
 import AppKit
 import ArgumentParser
 import CoverwallKit
+import CoverwallSpotify
 
 @main
 struct Coverwall: AsyncParsableCommand {
@@ -16,14 +17,28 @@ struct Coverwall: AsyncParsableCommand {
 struct Add: AsyncParsableCommand {
     static let configuration = CommandConfiguration(abstract: "Add a profile: cache the covers in <folder> and remember its settings.")
     @Argument(help: "Profile name (letters, digits, '-', '_').") var name: String
-    @Argument(help: "Folder of cover images (jpg, png, heic, webp, tiff) or music (mp3, m4a, flac with embedded art).") var folder: String
+    @Argument(help: ArgumentHelp("Folder of cover images (jpg, png, heic, webp, tiff) or music (mp3, m4a, flac with embedded art),",
+                                 discussion: "or spotify:saved-albums, spotify:top-artists, spotify:artist <name>, spotify:playlist <link>."))
+    var folder: String
+    @Argument(help: "The artist name or playlist link for spotify:artist / spotify:playlist.") var detail: String?
     @OptionGroup var options: ProfileOptions
     @Flag(help: "Print the sync report as JSON.") var json = false
+    @Flag(help: "Print Spotify's raw error replies.") var verbose = false
+
+    func validate() throws {
+        if detail != nil, !folder.hasPrefix("spotify:") { throw ValidationError("a second argument is only for spotify:artist and spotify:playlist") }
+    }
 
     func run() async throws {
-        var profile = Profile(source: URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path)
+        var source = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
+        if folder.hasPrefix("spotify:") {
+            let resolved = try await SpotifySources.resolve(folder, detail, api: SpotifyAccount().api(trace: trace(verbose)))
+            if let match = resolved.match { json ? warn("artist: \(match)") : print("artist: \(match)") }  // --json: stdout stays pure JSON
+            source = resolved.source
+        }
+        var profile = Profile(source: source)
         options.apply(to: &profile, fresh: true, displays: await ProfileOptions.displays)
-        try await show(name, profile, Store().add(name, profile), json: json)
+        try await show(name, profile, store(verbose: verbose).add(name, profile), json: json)
     }
 }
 
@@ -49,7 +64,7 @@ struct SetCommand: AsyncParsableCommand {
     }
 
     func run() async throws {
-        let store = Store()
+        let store = store()
         let displays = await ProfileOptions.displays
         let report = try await store.update(name) { options.apply(to: &$0, fresh: false, displays: displays) }
         let (name, profile) = try store.resolve(name, in: store.load())
@@ -59,12 +74,13 @@ struct SetCommand: AsyncParsableCommand {
 }
 
 struct Sync: AsyncParsableCommand {
-    static let configuration = CommandConfiguration(abstract: "Re-scan a profile's folder (new, changed and deleted covers).")
+    static let configuration = CommandConfiguration(abstract: "Re-scan a profile's folder or Spotify source (new, changed and deleted covers).")
     @Argument(help: "Profile (default: the active one).") var name: String?
     @Flag(help: "Print the sync report as JSON.") var json = false
+    @Flag(help: "Print Spotify's raw error replies.") var verbose = false
 
     func run() async throws {
-        let store = Store()
+        let store = store(verbose: verbose)
         let (name, profile) = try store.resolve(name, in: store.load())
         try await show(name, profile, store.sync(name), json: json)
     }
@@ -195,7 +211,7 @@ struct Doctor: ParsableCommand {
                   config.activeProfile.map { "active profile: \($0)" } ?? "no active profile — run `coverwall add <name> <folder>` or `coverwall use <name>`")
             for (name, profile) in config.profiles.sorted(by: { $0.key < $1.key }) {
                 var isFolder: ObjCBool = false
-                let source = fm.fileExists(atPath: profile.source, isDirectory: &isFolder) && isFolder.boolValue
+                let source = !profile.source.hasPrefix("/") || fm.fileExists(atPath: profile.source, isDirectory: &isFolder) && isFolder.boolValue
                 let tiles = tileCount(name)
                 check("profile \(name)", source && tiles > 0,
                       "\(tiles) tiles" + (source ? "" : ", folder missing: \(profile.source)") + (tiles > 0 ? "" : " — run `coverwall sync \(name)`"))
@@ -247,6 +263,11 @@ struct Settings: ParsableCommand {
 }
 
 // MARK: - Helpers
+
+/// The CLI's store: folders plus Spotify sources (Kit itself has no networking).
+func store(verbose: Bool = false) -> Store { Store(source: SpotifySources.factory(trace: trace(verbose))) }
+
+func trace(_ verbose: Bool) -> SpotifyAPI.Trace? { verbose ? { @Sendable in warn($0) } : nil }
 
 /// `add`/`sync` output, e.g. `mac: 100 images (3 skipped, 2 duplicates) → 7x5 grid, 35 visible`.
 func show(_ name: String, _ profile: Profile, _ report: SyncReport, json: Bool) throws {

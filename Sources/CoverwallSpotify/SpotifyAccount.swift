@@ -38,6 +38,12 @@ public struct SpotifyAccount: Sendable {
         return tokens
     }
 
+    /// Calls as the logged-in user; `trace` gets raw error replies (`--verbose`).
+    public func api(wait: @escaping SpotifyAPI.Wait = SpotifyAPI.sleep, trace: SpotifyAPI.Trace? = nil) throws -> SpotifyAPI {
+        guard let clientID = try clientID() else { throw SpotifyError.noClientID }
+        return SpotifyAPI(tokens: TokenProvider(clientID: clientID, store: store, http: http, now: now), http: http, wait: wait, trace: trace)
+    }
+
     /// Local only: Spotify has no revoke endpoint (SPIKE_NOTES Phase 7.0).
     public func logout(all: Bool) throws {
         try store.delete(Tokens.key)
@@ -62,14 +68,13 @@ public struct SpotifyAccount: Sendable {
     /// Stored state plus one live `GET /v1/me` (refreshing the token if needed).
     public func status() async throws -> Status {
         let id = try clientID()
-        guard let id, try Tokens.load(from: store) != nil else {
+        guard id != nil, try Tokens.load(from: store) != nil else {
             return Status(clientID: id != nil, loggedIn: false, scopes: [], expiresAt: nil, user: nil, problem: nil)
         }
         struct Me: Decodable { var id: String?; var display_name: String? }
-        let tokens = TokenProvider(clientID: id, store: store, http: http, now: now)
         var user: String?, problem: String?
         do {
-            let me = try JSONDecoder().decode(Me.self, from: await SpotifyAPI.get("me", tokens: tokens, http: http))
+            let me = try JSONDecoder().decode(Me.self, from: await api().get("me"))
             user = me.display_name ?? me.id
         } catch let error as SpotifyError {
             problem = error.description
@@ -81,28 +86,5 @@ public struct SpotifyAccount: Sendable {
         let stored = try Tokens.load(from: store)  // after a refresh in the live check
         return Status(clientID: true, loggedIn: stored != nil, scopes: stored?.scope.split(separator: " ").map(String.init) ?? [],
                       expiresAt: stored?.expiresAt, user: user, problem: problem)
-    }
-}
-
-/// Authenticated Web API calls: bearer token, one refresh + retry on 401, Spotify errors mapped (PLAN.md §4.7).
-public enum SpotifyAPI {
-    static let base = URL(string: "https://api.spotify.com/v1/")!
-
-    public static func get(_ path: String, tokens: TokenProvider, http: any HTTPClient) async throws -> Data {
-        var token = try await tokens.accessToken()
-        for attempt in 0..<2 {
-            var request = URLRequest(url: URL(string: path, relativeTo: base)!.absoluteURL)
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-            let (data, response) = try await http.send(request)
-            switch response.statusCode {
-            case 200: return data
-            case 401 where attempt == 0: token = try await tokens.accessToken(replacing: token)
-            case 401: throw SpotifyError.loginExpired
-            case 403: throw SpotifyError.forbidden
-            case 429: throw SpotifyError.rateLimited(retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init))
-            default: throw SpotifyError.http(response.statusCode)
-            }
-        }
-        throw SpotifyError.loginExpired
     }
 }

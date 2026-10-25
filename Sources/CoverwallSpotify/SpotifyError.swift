@@ -7,6 +7,15 @@ public enum SpotifyError: Error, Equatable, CustomStringConvertible {
     case invalidClientID
     case noClientID
     case forbidden
+    case playlistNotYours
+    case playlistNotFound
+    case unexpectedArgument(String)
+    case noCovers
+    case quotaExceeded
+    case unknownSource(String)
+    case missingArgument(String)
+    case badPlaylistLink(String)
+    case artistNotFound(String)
     case rateLimited(retryAfter: Int?)
     case notLoggedIn
     case loginExpired
@@ -24,6 +33,15 @@ public enum SpotifyError: Error, Equatable, CustomStringConvertible {
         case .invalidClientID: "that doesn't look like a Client ID (32 characters, 0-9 and a-f) — copy it from your app's Settings in the Spotify developer dashboard"
         case .noClientID: "no Spotify Client ID yet — run `coverwall spotify setup` first"
         case .forbidden: "Spotify refused the request. Likely: (1) the app owner has no Premium (Development Mode needs it), (2) this account isn't on the app's User Management list, (3) the endpoint isn't available in Development Mode. Existing covers are kept"
+        case .playlistNotYours: "Spotify refused this playlist. Likely: (1) it isn't yours — Spotify only shares playlists you own or collaborate on, so copy it into one of your own, (2) the app owner has no Premium, (3) this account isn't on the app's User Management list"
+        case .playlistNotFound: "Spotify can't find this playlist (deleted or private?) — check the link, then `coverwall remove` the profile or add it again"
+        case .unexpectedArgument(let source): "\(source) takes no extra argument — use: coverwall add <name> \(source)"
+        case .noCovers: "Spotify returned no covers for this source — existing covers are kept; check the source with `coverwall list`"
+        case .quotaExceeded: "this Spotify app's quota is used up for now — try again later (tomorrow at the latest); existing covers are kept"
+        case .unknownSource(let source): "unknown source '\(source)' — use spotify:saved-albums, spotify:top-artists, spotify:artist \"<name>\" or spotify:playlist <link>"
+        case .missingArgument(let source): source == "spotify:artist" ? "say which artist: coverwall add <name> spotify:artist \"Mac Miller\"" : "add the playlist link: coverwall add <name> spotify:playlist https://open.spotify.com/playlist/…"
+        case .badPlaylistLink(let link): "'\(link)' isn't a Spotify playlist link — copy it via Share → Copy link to playlist"
+        case .artistNotFound(let name): "Spotify found no artist named '\(name)' — check the spelling"
         case .rateLimited(let seconds): "Spotify's rate limit or quota is used up — try again " + (seconds.map { "in \($0) s" } ?? "later")
         case .notLoggedIn: "not logged in to Spotify — run `coverwall spotify login`"
         case .loginExpired: "your Spotify login expired or was revoked — run `coverwall spotify login`"

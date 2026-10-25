@@ -17,6 +17,8 @@ kit:
 
 test:
 	swift test
+	# Release too: Homebrew ships it, and a release-only TaskGroup miscompile once hung `add` (Phase 7.3).
+	swift test -c release
 
 $(SAVER): $(SOURCES) Saver/Info.plist
 	rm -rf $@

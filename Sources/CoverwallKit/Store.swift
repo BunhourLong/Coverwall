@@ -2,10 +2,16 @@ import Foundation
 
 /// The CLI's view of the data dir: `config.json` + per-profile tile caches (PLAN.md §4.5).
 public struct Store: Sendable {
-    public let dataDir: URL
+    /// Turns a profile into its cover source; Kit only knows folders, the CLI adds Spotify (Kit has no networking).
+    public typealias SourceFactory = @Sendable (Profile) throws -> any CoverSource
 
-    public init(dataDir: URL = Paths.dataDir) {
-        self.dataDir = dataDir
+    public let dataDir: URL
+    let now: @Sendable () -> Date
+    let source: SourceFactory
+
+    public init(dataDir: URL = Paths.dataDir, now: @escaping @Sendable () -> Date = Date.init,
+                source: @escaping SourceFactory = { LocalFolderSource(folder: $0.source) }) {
+        (self.dataDir, self.now, self.source) = (dataDir, now, source)
     }
 
     /// No config yet → empty config. Unreadable → error, so `save` never clobbers it.
@@ -32,7 +38,7 @@ public struct Store: Sendable {
         config.profiles[name] = profile
         config.activeProfile = config.activeProfile ?? name
         try config.validate()  // before sync: the name becomes a directory
-        let report = try await TileCache.sync(name, profile: profile, dataDir: dataDir)
+        let report = try await cache(name, profile)
         try save(config)
         return report
     }
@@ -47,7 +53,33 @@ public struct Store: Sendable {
     /// Re-scans the source folder.
     public func sync(_ name: String?) async throws -> SyncReport {
         let (name, profile) = try resolve(name, in: load())
-        return try await TileCache.sync(name, profile: profile, dataDir: dataDir)
+        return try await cache(name, profile)
+    }
+
+    private func cache(_ name: String, _ profile: Profile) async throws -> SyncReport {
+        do {
+            return try await TileCache.sync(name, from: source(profile), tileMaxPixels: profile.tileMaxPixels, dataDir: dataDir, now: now())
+        } catch {
+            // Past its expiry a cache goes even when the refresh fails: the source's terms win (PLAN.md §4.7).
+            let manifest = try? JSONDecoder().decode(CacheManifest.self, from: Data(contentsOf: Paths.manifest(name, in: dataDir)))
+            if let expiresAt = manifest?.expiresAt, now().timeIntervalSince1970 >= expiresAt { dropCache(name) }
+            throw error
+        }
+    }
+
+    /// Deletes the caches whose source limits how long covers may be kept (e.g. after a logout). Profiles stay.
+    public func purgeExpiringCaches() throws -> [String] {
+        try load().profiles.keys.sorted().filter { name in
+            let manifest = try? JSONDecoder().decode(CacheManifest.self, from: Data(contentsOf: Paths.manifest(name, in: dataDir)))
+            guard manifest?.sourcePolicy.cacheTTL != nil else { return false }
+            dropCache(name)
+            return true
+        }
+    }
+
+    private func dropCache(_ name: String) {
+        try? FileManager.default.removeItem(at: Paths.profile(name, in: dataDir))
+        TileCache.removeStaging(name, in: dataDir)
     }
 
     /// Applies `change` and saves; re-encodes the cache only if the tile size changed.
@@ -58,7 +90,7 @@ public struct Store: Sendable {
         change(&after)
         config.profiles[name] = after
         try save(config)
-        return after.tileMaxPixels == before.tileMaxPixels ? nil : try await TileCache.sync(name, profile: after, dataDir: dataDir)
+        return after.tileMaxPixels == before.tileMaxPixels ? nil : try await cache(name, after)
     }
 
     public func use(_ name: String) throws {
@@ -73,8 +105,7 @@ public struct Store: Sendable {
         guard config.profiles.removeValue(forKey: name) != nil else { throw StoreError.unknownProfile(name) }
         if config.activeProfile == name { config.activeProfile = nil }
         try save(config)
-        try? FileManager.default.removeItem(at: Paths.profile(name, in: dataDir))
-        TileCache.removeStaging(name, in: dataDir)
+        dropCache(name)
     }
 }
 

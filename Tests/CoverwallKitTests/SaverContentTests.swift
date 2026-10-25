@@ -76,3 +76,12 @@ private func syncedDataDir() async throws -> URL {
 @Test func configureSheetSummaryWithoutAProfileIsTheFallbackMessage() async throws {
     #expect(SaverContent.summary(from: try scratch().data) == "Coverwall: no profile — run \"coverwall add <name> <folder>\"")
 }
+
+@Test func configureSheetLabelsANonFolderSourceAsSource() async throws {
+    let data = try await syncedDataDir()
+    var config = try Store(dataDir: data).load()
+    config.profiles["mac"]!.source = "spotify:saved-albums"
+    try Store(dataDir: data).save(config)
+
+    #expect(SaverContent.summary(from: data).contains("\nSource: spotify:saved-albums\n"))
+}

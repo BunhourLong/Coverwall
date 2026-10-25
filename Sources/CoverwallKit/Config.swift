@@ -86,12 +86,20 @@ public struct Profile: Codable, Equatable, Sendable {
         self.heroes = heroes
     }
 
+    /// A folder, or a Spotify source as `add` stores it (ids are base62, 22 characters). The saver never reads it.
+    static func isSource(_ source: String) -> Bool {
+        if source.hasPrefix("/") || source == "spotify:saved-albums" || source == "spotify:top-artists" { return true }
+        let parts = source.split(separator: ":", omittingEmptySubsequences: false)
+        return parts.count == 3 && parts[0] == "spotify" && (parts[1] == "artist" || parts[1] == "playlist")
+            && parts[2].count == 22 && parts[2].allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber) }
+    }
+
     func validate(name: String) throws {
         func check(_ ok: Bool, _ field: String, _ expected: String) throws {
             if !ok { throw ConfigError.invalid(profile: name, field: field, expected: expected) }
         }
         let range = 1...16
-        try check(source.hasPrefix("/"), "source", "an absolute path")
+        try check(Self.isSource(source), "source", "an absolute path or spotify:saved-albums|top-artists|artist:<id>|playlist:<id>")
         try check(range.contains(grid.columns) && range.contains(grid.rows ?? 1), "grid", "1x1 … 16x16")
         try check(intervalSeconds > 0, "intervalSeconds", "> 0")
         // Without rows only one row is guaranteed.

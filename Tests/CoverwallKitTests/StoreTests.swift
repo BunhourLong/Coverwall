@@ -99,3 +99,59 @@ private func store() throws -> (Store, URL) {
 
     await #expect(throws: (any Error).self) { try await store.add("other", profile(source)) }
 }
+
+private struct OneCover: CoverSource {
+    let policy: SourcePolicy
+    var fail = false
+    func items() async throws -> [CoverItem] {
+        if fail { throw StoreError.noActiveProfile }  // any failure
+        return [CoverItem(source: "https://i.example/a", mtime: 0)]
+    }
+    func data(for item: CoverItem) async throws -> Data? {
+        let url = try scratch().source.appendingPathComponent("a.png")
+        try writeImage(url, width: 64, height: 64, shade: 0.3)
+        return try Data(contentsOf: url)
+    }
+}
+
+private let expiring = SourcePolicy(crop: .none, attribution: .spotify, cacheTTL: 60, mixable: false)
+
+@Test func storeTakesNonFolderSourcesFromItsFactory() async throws {
+    let (_, folder) = try store()
+    let store = Store(dataDir: try scratch().data, source: { profile in
+        profile.source.hasPrefix("spotify:") ? OneCover(policy: expiring) as any CoverSource : LocalFolderSource(folder: profile.source)
+    })
+
+    #expect(try await store.add("remote", Profile(source: "spotify:saved-albums")).images == 1)
+    #expect(try await store.add("local", profile(folder)).images == 1)
+}
+
+@Test func purgingRemovesOnlyCachesWithATTL() async throws {
+    let (_, folder) = try store()
+    let store = Store(dataDir: try scratch().data, source: { profile in
+        profile.source.hasPrefix("spotify:") ? OneCover(policy: expiring) as any CoverSource : LocalFolderSource(folder: profile.source)
+    })
+    _ = try await store.add("remote", Profile(source: "spotify:saved-albums"))
+    _ = try await store.add("local", profile(folder))
+
+    #expect(try store.purgeExpiringCaches() == ["remote"])
+
+    #expect(!FileManager.default.fileExists(atPath: Paths.profile("remote", in: store.dataDir).path))
+    #expect(FileManager.default.fileExists(atPath: Paths.manifest("local", in: store.dataDir).path))
+    #expect(try store.load().profiles.keys.sorted() == ["local", "remote"])  // profiles stay; the next sync refills them
+}
+
+@Test func failedSyncOfAnExpiredCachePurgesItAnywayButAValidOneIsKept() async throws {
+    final class World: @unchecked Sendable { var failing = false, clock = Date() }
+    let world = World()
+    let store = Store(dataDir: try scratch().data, now: { world.clock }) { _ in OneCover(policy: expiring, fail: world.failing) }
+    _ = try await store.add("remote", Profile(source: "spotify:saved-albums"))
+    world.failing = true
+
+    await #expect(throws: StoreError.noActiveProfile) { try await store.sync("remote") }
+    #expect(FileManager.default.fileExists(atPath: Paths.manifest("remote", in: store.dataDir).path))  // still valid: kept
+
+    world.clock = world.clock.addingTimeInterval(61)
+    await #expect(throws: StoreError.noActiveProfile) { try await store.sync("remote") }
+    #expect(!FileManager.default.fileExists(atPath: Paths.manifest("remote", in: store.dataDir).path))  // expired: the terms win
+}

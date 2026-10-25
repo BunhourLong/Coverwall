@@ -56,8 +56,10 @@ struct Spotify: AsyncParsableCommand {
 
         func run() throws {
             try SpotifyAccount().logout(all: all)
+            // Covers fetched with this login may not outlive it (Spotify's terms); the profiles stay and refill on sync.
+            let purged = try store().purgeExpiringCaches()
             print("""
-                logged out\(all ? " and Client ID removed" : "") on this Mac.
+                logged out\(all ? " and Client ID removed" : "") on this Mac\(purged.isEmpty ? "" : "; removed the cached covers of \(purged.joined(separator: ", "))").
                 To also remove coverwall's access from your account: Spotify account page → Manage apps → Remove access.
                 """)
         }
