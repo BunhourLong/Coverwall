@@ -4,12 +4,12 @@ import CoverwallKit
 
 private final class Marker {}
 
-/// Runs the built `coverwall` against `data` (via `COVERWALL_DATA_DIR`).
+/// Runs the built `coverwall` against `data` (via `COVERWALL_DATA_DIR`); secrets go to a file next to it, never the Keychain.
 private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int32, out: String, err: String) {
     let process = Process(), out = Pipe(), err = Pipe()
     process.executableURL = Bundle(for: Marker.self).bundleURL.deletingLastPathComponent().appendingPathComponent("coverwall")
     process.arguments = arguments
-    process.environment = ["COVERWALL_DATA_DIR": data.path]
+    process.environment = ["COVERWALL_DATA_DIR": data.path, "COVERWALL_CLI_DIR": data.appendingPathComponent("../cli").standardized.path]
     (process.standardOutput, process.standardError) = (out, err)
     try process.run()
     process.waitUntilExit()
@@ -64,4 +64,33 @@ private func coverwall(_ arguments: String..., data: URL) throws -> (status: Int
     // The test binary has no ../share/coverwall, so this fails before touching ~/Library or the host.
     let install = try coverwall("install", data: try scratch().data)
     #expect(install.status != 0 && install.err.contains("make install") && install.err.contains("brew reinstall coverwall"), "\(install.err)")
+}
+
+@Test func spotifySetupStoresTheClientIDPrivatelyAndLogoutAllForgetsIt() throws {
+    let data = try scratch().data
+    let id = "0123456789abcdef0123456789abcdef"
+
+    let bad = try coverwall("spotify", "setup", "--client-id", "nope", data: data)
+    #expect(bad.status == 1 && bad.err.contains("doesn't look like a Client ID"))
+
+    let setup = try coverwall("spotify", "setup", "--client-id", id, data: data)
+    #expect(setup.status == 0, "\(setup.err)")
+    let warning = try #require(setup.out.range(of: "Premium")), dashboard = try #require(setup.out.range(of: "developer.spotify.com/dashboard"))
+    #expect(warning.lowerBound < dashboard.lowerBound)  // the Premium warning comes before any dashboard step
+    #expect(setup.out.contains("http://127.0.0.1/callback"))
+
+    let status = try coverwall("spotify", "status", "--json", data: data)
+    #expect(status.status == 0 && status.out.contains("\"clientID\" : true") && status.out.contains("\"loggedIn\" : false"))
+    let secrets = data.appendingPathComponent("../cli/secrets.json").standardized
+    #expect(try String(contentsOf: secrets, encoding: .utf8).contains(id))
+    let dataFiles = FileManager.default.enumerator(at: data, includingPropertiesForKeys: nil)?.compactMap { $0 as? URL } ?? []
+    #expect(dataFiles.allSatisfy { !((try? String(contentsOf: $0, encoding: .utf8))?.contains(id) ?? false) })
+
+    #expect(try coverwall("spotify", "logout", "--all", data: data).status == 0)
+    #expect(try coverwall("spotify", "status", "--json", data: data).out.contains("\"clientID\" : false"))
+}
+
+@Test func spotifyLoginWithoutSetupSaysToRunSetup() throws {
+    let login = try coverwall("spotify", "login", data: try scratch().data)
+    #expect(login.status == 1 && login.err.contains("coverwall spotify setup"))
 }

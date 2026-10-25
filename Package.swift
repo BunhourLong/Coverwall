@@ -13,11 +13,14 @@ let package = Package(
     ],
     targets: [
         .target(name: "CoverwallKit"),
+        // CLI-only networking (CLAUDE.md 6): never linked by the saver.
+        .target(name: "CoverwallSpotify", dependencies: ["CoverwallKit"]),
         .executableTarget(name: "coverwall", dependencies: [
-            "CoverwallKit",
+            "CoverwallKit", "CoverwallSpotify",
             .product(name: "ArgumentParser", package: "swift-argument-parser"),
         ]),
         // Depends on `coverwall` so the end-to-end tests can run the built binary.
         .testTarget(name: "CoverwallKitTests", dependencies: ["CoverwallKit", "coverwall"], resources: [.copy("Fixtures")]),
+        .testTarget(name: "CoverwallSpotifyTests", dependencies: ["CoverwallSpotify"]),
     ]
 )

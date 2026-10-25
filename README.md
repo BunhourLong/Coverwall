@@ -121,6 +121,7 @@ becomes the active one.
 | `coverwall settings` | Open the screen saver settings |
 | `coverwall reload` | Restart `legacyScreenSaver` so macOS loads the newest bundle |
 | `coverwall doctor` | Check install, data dir, config, caches and stray processes |
+| `coverwall spotify setup` / `login` / `logout [--all]` / `status [--json]` | Connect your own Spotify app (needs Premium; Spotify profiles arrive in a later release). See [PRIVACY.md](PRIVACY.md) |
 
 `add`, `sync`, `list` and `doctor` take `--json` for scripting. Every command exits non-zero on
 error, and the error says what to do next. `coverwall help <command>` shows all options.

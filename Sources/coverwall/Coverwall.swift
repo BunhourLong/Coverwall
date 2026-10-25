@@ -8,7 +8,7 @@ struct Coverwall: AsyncParsableCommand {
         commandName: "coverwall",
         abstract: "Control the Coverwall album-cover screen saver.",
         subcommands: [Add.self, Use.self, SetCommand.self, Sync.self, List.self, Remove.self,
-                      Install.self, Uninstall.self, Doctor.self, Reload.self, Preview.self, Settings.self])
+                      Install.self, Uninstall.self, Doctor.self, Reload.self, Preview.self, Settings.self, Spotify.self])
 }
 
 // MARK: - Profiles

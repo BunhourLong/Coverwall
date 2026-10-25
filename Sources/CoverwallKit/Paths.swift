@@ -13,6 +13,13 @@ public enum Paths {
         return base.appendingPathComponent("Library/Application Support/Coverwall", isDirectory: true)
     }
 
+    /// CLI only: the CLI's own files (fallback secrets, sync log), outside the saver's container.
+    public static var cliDir: URL {
+        // Test-only, like COVERWALL_DATA_DIR.
+        if let dir = ProcessInfo.processInfo.environment["COVERWALL_CLI_DIR"] { return URL(fileURLWithPath: dir, isDirectory: true) }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/coverwall", isDirectory: true)
+    }
+
     /// CLI only (in the sandbox the home dir is the container).
     public static var installedSaver: URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Screen Savers/Coverwall.saver")
